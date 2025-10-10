@@ -239,3 +239,5 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                     st.write(f"Pedido {pid}: {' → '.join(map(str, ruta))}")
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
+except Exception as e:
+st.error(f"An error occurred: {e}")
