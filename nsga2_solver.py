@@ -11,7 +11,7 @@ def calcular_required_slots(D, VU, Vm):
     demand_total = D.sum(axis=0)
     required_slots = {}
     for sku_idx in range(D.shape[1]):
-        sku_id = sku_idx + 1
+        sku_id = sku_idx  # Corregido: los índices deben coincidir con VU y D
         required_slots[sku_id] = math.ceil(demand_total[sku_idx] * VU[sku_id] / Vm)
     return required_slots
 
@@ -186,7 +186,7 @@ def nsga2(
     all_assignments = []
     demand_total = D.sum(axis=0)
     for sku_idx in range(NUM_SKUS):
-        sku_id = sku_idx + 1
+        sku_id = sku_idx  # Corregido: los índices deben coincidir con VU y D
         count = math.ceil(demand_total[sku_idx] * VU[sku_id] / Vm)
         all_assignments.extend([sku_id] * count)
     usable_slots = NUM_SLOTS - len(PROHIBITED_SLOTS)
@@ -233,3 +233,4 @@ def nsga2(
         return pareto_front, pareto_fitness
     else:
         return pop, final_fitness
+
