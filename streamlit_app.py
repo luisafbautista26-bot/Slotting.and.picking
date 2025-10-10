@@ -181,63 +181,61 @@ if st.button("Ejecutar optimización"):
         Se muestran ejemplos de soluciones distintas encontradas por el algoritmo, agrupadas por similitud.
         """)
         slotting_solutions = []
-        try:
-            if len(pareto_fitness) >= 3:
-                kmeans = KMeans(n_clusters=3, random_state=0).fit(fitness_array)
-                labels = kmeans.labels_
-                for cluster in range(3):
-                    idxs = np.where(labels == cluster)[0]
-                    if len(idxs) > 0:
-                        idx = idxs[0]
-                        st.write(f"Cluster {cluster+1}:")
-                        st.write(f"Funciones objetivo: f1 = {pareto_fitness[idx][0]:.2f}, f2 = {pareto_fitness[idx][1]:.2f}")
-                        st.write("Asignación de SKUs a slots:")
-                        df_asig = pd.DataFrame({
-                            'Slot': np.arange(len(pareto_solutions[idx])),
-                            'SKU asignado': pareto_solutions[idx]
-                        })
-                        st.dataframe(df_asig)
-                        slotting_solutions.append(pareto_solutions[idx])
-            else:
-                st.info("No hay suficientes soluciones para clustering.")
-                slotting_solutions = pareto_solutions
-            # Guardar soluciones de slotting en el estado de sesión (dentro del try)
-            st.session_state['slotting_solutions'] = slotting_solutions
-            st.session_state['D'] = D
-            st.session_state['VU'] = VU
-            st.session_state['Sr'] = Sr
-            st.session_state['D_racks'] = D_racks
-        except Exception as e:
-            st.error(f"Error en la ejecución: {e}")
+try:
+    if len(pareto_fitness) >= 3:
+        kmeans = KMeans(n_clusters=3, random_state=0).fit(fitness_array)
+        labels = kmeans.labels_
+        for cluster in range(3):
+            idxs = np.where(labels == cluster)[0]
+            if len(idxs) > 0:
+                idx = idxs[0]
+                st.write(f"Cluster {cluster+1}:")
+                st.write(f"Funciones objetivo: f1 = {pareto_fitness[idx][0]:.2f}, f2 = {pareto_fitness[idx][1]:.2f}")
+                st.write("Asignación de SKUs a slots:")
+                df_asig = pd.DataFrame({
+                    'Slot': np.arange(len(pareto_solutions[idx])),
+                    'SKU asignado': pareto_solutions[idx]
+                })
+                st.dataframe(df_asig)
+                slotting_solutions.append(pareto_solutions[idx])
+    else:
+        st.info("No hay suficientes soluciones para clustering.")
+        slotting_solutions = pareto_solutions
+    # Guardar soluciones de slotting en el estado de sesión (dentro del try)
+    st.session_state['slotting_solutions'] = slotting_solutions
+    st.session_state['D'] = D
+    st.session_state['VU'] = VU
+    st.session_state['Sr'] = Sr
+    st.session_state['D_racks'] = D_racks
 
-# --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
-if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:
-    st.markdown("---")
-    st.header("Optimización de Picking (NSGA-II)")
-    st.markdown("""
-    Ahora puedes optimizar el picking usando todas las soluciones de slotting encontradas.
-    """)
-    if st.button("Ejecutar optimización de picking para todas las soluciones de slotting"):
-        st.info("Ejecutando NSGA-II de picking para todas las soluciones de slotting...")
-        try:
-            import picking_solver
-            resultados_picking = picking_solver.nsga2_picking(
-                slot_assignments=st.session_state['slotting_solutions'],
-                D=st.session_state['D'],
-                VU=st.session_state['VU'],
-                Sr=st.session_state['Sr'],
-                D_racks=st.session_state['D_racks'],
-                pop_size=10,  # puedes ajustar
-                n_gen=5       # puedes ajustar
-            )
-            st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
-            for idx, res in enumerate(resultados_picking):
-                st.markdown(f"#### Solución de slotting {idx+1}")
-                st.write(f"Funciones objetivo de picking: distancia total = {res['distancia_total']:.2f}, distancia SKUs demandados = {res['sku_distancia']:.2f}")
-                st.write("Ruta de picking por pedido:")
-                for pid, ruta in enumerate(res['rutas'], start=1):
-                    st.write(f"Pedido {pid}: {' → '.join(map(str, ruta))}")
-        except Exception as e:
-            st.error(f"Error al ejecutar picking: {e}")
+    # --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
+    if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:
+        st.markdown("---")
+        st.header("Optimización de Picking (NSGA-II)")
+        st.markdown("""
+        Ahora puedes optimizar el picking usando todas las soluciones de slotting encontradas.
+        """)
+        if st.button("Ejecutar optimización de picking para todas las soluciones de slotting"):
+            st.info("Ejecutando NSGA-II de picking para todas las soluciones de slotting...")
+            try:
+                import picking_solver
+                resultados_picking = picking_solver.nsga2_picking(
+                    slot_assignments=st.session_state['slotting_solutions'],
+                    D=st.session_state['D'],
+                    VU=st.session_state['VU'],
+                    Sr=st.session_state['Sr'],
+                    D_racks=st.session_state['D_racks'],
+                    pop_size=10,  # puedes ajustar
+                    n_gen=5       # puedes ajustar
+                )
+                st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
+                for idx, res in enumerate(resultados_picking):
+                    st.markdown(f"#### Solución de slotting {idx+1}")
+                    st.write(f"Funciones objetivo de picking: distancia total = {res['distancia_total']:.2f}, distancia SKUs demandados = {res['sku_distancia']:.2f}")
+                    st.write("Ruta de picking por pedido:")
+                    for pid, ruta in enumerate(res['rutas'], start=1):
+                        st.write(f"Pedido {pid}: {' → '.join(map(str, ruta))}")
+            except Exception as e:
+                st.error(f"Error al ejecutar picking: {e}")
 except Exception as e:
-st.error(f"An error occurred: {e}")
+    st.error(f"Error en la ejecución: {e}")
