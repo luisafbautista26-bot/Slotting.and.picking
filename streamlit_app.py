@@ -181,6 +181,10 @@ if st.button("Ejecutar optimización"):
         Se muestran ejemplos de soluciones distintas encontradas por el algoritmo, agrupadas por similitud.
         """)
         slotting_solutions = []
+        
+    except Exception as e:
+    st.error(f"Error en la ejecución: {e}")
+    
 try:
     if len(pareto_fitness) >= 3:
         kmeans = KMeans(n_clusters=3, random_state=0).fit(fitness_array)
@@ -207,7 +211,10 @@ try:
     st.session_state['VU'] = VU
     st.session_state['Sr'] = Sr
     st.session_state['D_racks'] = D_racks
-
+    
+except Exception as e:
+    st.error(f"Error en la ejecución: {e}")
+    
     # --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
     if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:
         st.markdown("---")
