@@ -244,3 +244,4 @@ except Exception as e:
                         st.write(f"Pedido {pid}: {' → '.join(map(str, ruta))}")
             except Exception as e:
                 st.error(f"Error al ejecutar picking: {e}")
+    finally
