@@ -5,6 +5,8 @@ import math
 from collections import defaultdict
 import matplotlib.pyplot as plt
 
+__all__ = ["nsga2_picking_streamlit"]
+
 # --- Funciones auxiliares completas para el algoritmo de picking ---
 def capacidad_slot(slot, slot_assignment_row, Vm, VU):
     sku = slot_assignment_row[slot]
