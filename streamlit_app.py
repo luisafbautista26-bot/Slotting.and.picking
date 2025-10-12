@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,7 +5,6 @@ import matplotlib.pyplot as plt
 import random
 import math
 from collections import defaultdict
-from sklearn.cluster import KMeans
 import traceback
 
 st.title("NSGA-II Slotting & Picking Optimizer")
@@ -69,16 +67,11 @@ st.header("Ejecución del algoritmo NSGA-II")
 import nsga2_solver
 
 if st.button("Ejecutar optimización"):
-    # --- Ejemplo de mapeo: se asume que las hojas tienen nombres estándar ---
-    # Puedes adaptar esto según la estructura real de tu Excel
     try:
-        # Ejemplo: leer parámetros desde hojas específicas
-        # Aquí debes adaptar el mapeo según tu Excel
-        # Leer VU y D solo con filas/columnas con datos válidos
         if "VU" in excel.sheet_names:
             VU_df = pd.read_excel(excel, sheet_name="VU", header=None)
-            VU_df = VU_df.dropna(how='all')  # Elimina filas completamente vacías
-            VU_df = VU_df.dropna(axis=1, how='all')  # Elimina columnas completamente vacías
+            VU_df = VU_df.dropna(how='all')
+            VU_df = VU_df.dropna(axis=1, how='all')
         else:
             VU_df = None
 
@@ -89,7 +82,6 @@ if st.button("Ejecutar optimización"):
         else:
             D_df = None
 
-        # Leer D_racks tal cual, sin eliminar filas/columnas
         if "D_racks" in excel.sheet_names:
             D_racks_df = pd.read_excel(excel, sheet_name="D_racks", header=None)
         else:
@@ -97,40 +89,32 @@ if st.button("Ejecutar optimización"):
         Sr_df = pd.read_excel(excel, sheet_name="Sr") if "Sr" in excel.sheet_names else None
         D_racks_df = pd.read_excel(excel, sheet_name="D_racks") if "D_racks" in excel.sheet_names else None
 
-        # --- Parámetros fijos o desde Excel ---
         Vm = 3
         PROHIBITED_SLOTS = {0, 1, 2, 3}
 
-        # --- Procesar VU ---
         if VU_df is not None:
-            # Asegura que las claves sean 0, 1, 2, ... para alinear con las columnas de D
             VU = {i: float(row[1]) for i, row in enumerate(VU_df.values)}
         else:
             st.error("No se encontró la hoja 'VU' en el Excel.")
             st.stop()
 
-        # --- Procesar D (demanda) ---
         if D_df is not None:
             D = D_df.values
         else:
             st.error("No se encontró la hoja 'D' en el Excel.")
             st.stop()
 
-        # Validación: número de SKUs en VU debe coincidir con columnas en D
         if VU_df is not None:
             num_vu = len(VU)
             num_d = D.shape[1]
-            # Mostrar los índices para depuración
             st.write(f"Índices de VU: {list(VU.keys())}")
             st.write(f"Número de columnas en D: {num_d}")
-            # Validar que los índices de VU sean exactamente 0..num_d-1
             if list(VU.keys()) != list(range(num_d)):
                 st.error(f"Los índices de VU ({list(VU.keys())}) no coinciden con los índices esperados (0 a {num_d-1}).\nRevisa que no haya filas vacías o desfasadas en la hoja VU y que el número de columnas en D sea correcto.")
                 st.stop()
 
         NUM_SKUS = D.shape[1]
 
-        # --- Procesar Sr (racks por slot) ---
         if Sr_df is not None:
             Sr = Sr_df.values
         else:
@@ -141,14 +125,12 @@ if st.button("Ejecutar optimización"):
         NUM_SLOTS = len(rack_assignment)
         rack_assignment = rack_assignment[:NUM_SLOTS]
 
-        # --- Procesar D_racks (distancias entre racks) ---
         if D_racks_df is not None:
             D_racks = D_racks_df.values
         else:
             st.error("No se encontró la hoja 'D_racks' en el Excel.")
             st.stop()
 
-        # Validación racks: mostrar tamaño de D_racks y máximo índice de rack usado
         num_racks_d_racks = D_racks.shape[0]
         max_rack_assignment = np.max(rack_assignment)
         st.write(f"Tamaño de D_racks: {num_racks_d_racks}")
@@ -157,7 +139,6 @@ if st.button("Ejecutar optimización"):
             st.error(f"El máximo índice de rack usado ({max_rack_assignment}) es mayor o igual al tamaño de la matriz D_racks ({num_racks_d_racks}). Revisa que la matriz D_racks tenga suficientes filas/columnas para todos los racks usados en Sr.")
             st.stop()
 
-        # --- Ejecutar NSGA-II ---
         with st.spinner("Ejecutando NSGA-II, por favor espera..."):
             pareto_solutions, pareto_fitness = nsga2_solver.nsga2(
                 pop_size=pop_size,
@@ -177,7 +158,6 @@ if st.button("Ejecutar optimización"):
 
         st.success(f"¡Optimización completada! Se encontraron {len(pareto_solutions)} soluciones en el frente de Pareto.")
 
-        # --- Visualización del frente de Pareto ---
         st.markdown("""
         ### ¿Qué significa el resultado?
         El algoritmo NSGA-II busca **minimizar dos funciones objetivo**:
@@ -196,7 +176,6 @@ if st.button("Ejecutar optimización"):
         ax.grid(True)
         st.pyplot(fig)
 
-        # --- Mejor solución balanceada (distancia Manhattan al ideal) ---
         fitness_array = np.array(pareto_fitness)
         ideal = fitness_array.min(axis=0)
         manhattan_distances = np.linalg.norm(fitness_array - ideal, ord=1, axis=1)
@@ -217,47 +196,16 @@ if st.button("Ejecutar optimización"):
         })
         st.dataframe(df_asignacion)
 
-        # --- Soluciones representativas por clustering ---
-        st.subheader("Soluciones representativas (clustering)")
-        st.markdown("""
-        Se muestran ejemplos de soluciones distintas encontradas por el algoritmo, agrupadas por similitud.
-        """)
-        slotting_solutions = []
-        
+        # Guardar todas las soluciones del frente de Pareto de slotting para picking
+        st.session_state['slotting_solutions'] = pareto_solutions
+        st.session_state['D'] = D
+        st.session_state['VU'] = VU
+        st.session_state['Sr'] = Sr
+        st.session_state['D_racks'] = D_racks
+
     except Exception as e:
         st.error(f"Error en la ejecución: {e}")
         st.text(traceback.format_exc())
-    else:
-        # Solo ejecutar clustering y guardar en session_state si la optimización fue exitosa
-        try:
-            if len(pareto_fitness) >= 3:
-                kmeans = KMeans(n_clusters=3, random_state=0).fit(fitness_array)
-                labels = kmeans.labels_
-                for cluster in range(3):
-                    idxs = np.where(labels == cluster)[0]
-                    if len(idxs) > 0:
-                        idx = idxs[0]
-                        st.write(f"Cluster {cluster+1}:")
-                        st.write(f"Funciones objetivo: f1 = {pareto_fitness[idx][0]:.2f}, f2 = {pareto_fitness[idx][1]:.2f}")
-                        st.write("Asignación de SKUs a slots:")
-                        df_asig = pd.DataFrame({
-                            'Slot': np.arange(len(pareto_solutions[idx])),
-                            'SKU asignado': pareto_solutions[idx]
-                        })
-                        st.dataframe(df_asig)
-                        slotting_solutions.append(pareto_solutions[idx])
-            else:
-                st.info("No hay suficientes soluciones para clustering.")
-                slotting_solutions = pareto_solutions
-            # Guardar soluciones de slotting en el estado de sesión
-            st.session_state['slotting_solutions'] = slotting_solutions
-            st.session_state['D'] = D
-            st.session_state['VU'] = VU
-            st.session_state['Sr'] = Sr
-            st.session_state['D_racks'] = D_racks
-        except Exception as e:
-            st.error(f"Error en la ejecución: {e}")
-            st.text(traceback.format_exc())
 
 # --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
 if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:
@@ -270,22 +218,59 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
         st.info("Ejecutando NSGA-II de picking para todas las soluciones de slotting...")
         try:
             import picking_solver
-            resultados_picking = picking_solver.nsga2_picking(
+            resultados_picking = picking_solver.nsga2_picking_streamlit(
                 slot_assignments=st.session_state['slotting_solutions'],
                 D=st.session_state['D'],
                 VU=st.session_state['VU'],
                 Sr=st.session_state['Sr'],
                 D_racks=st.session_state['D_racks'],
-                pop_size=10,  # puedes ajustar
-                n_gen=5       # puedes ajustar
+                pop_size=20,  # puedes ajustar
+                n_gen=10      # puedes ajustar
             )
             st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
+
+            # Unificar la gráfica de Pareto de todas las soluciones
+            fig, ax = plt.subplots(figsize=(7,5))
+            colores = plt.cm.tab10.colors
+            best_points = []
             for idx, res in enumerate(resultados_picking):
-                st.markdown(f"#### Solución de slotting {idx+1}")
-                st.write(f"Funciones objetivo de picking: distancia total = {res['distancia_total']:.2f}, distancia SKUs demandados = {res['sku_distancia']:.2f}")
-                st.write("Ruta de picking por pedido:")
-                for pid, ruta in enumerate(res['rutas'], start=1):
-                    st.write(f"Pedido {pid}: {' → '.join(map(str, ruta))}")
+                pf = res['pareto_front']
+                f1 = [x[1] for x in pf]
+                f2 = [x[2] for x in pf]
+                ax.scatter(f1, f2, label=f'Slotting {idx+1}', color=colores[idx % len(colores)], s=60, alpha=0.6)
+                # Resaltar la mejor solución de cada slotting
+                best_idx = min(pf, key=lambda x: x[1])[0] if pf else 0
+                best_f1 = res['population_eval_triples'][best_idx][0]
+                best_f2 = res['population_eval_triples'][best_idx][1]
+                best_points.append((best_f1, best_f2, idx))
+            # Dibujar la mejor solución de todas (la más cercana al ideal)
+            if best_points:
+                best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
+                best_f1, best_f2, best_idx = best_points[best_overall_idx]
+                ax.scatter([best_f1], [best_f2], color='red', s=120, marker='*', label='Mejor global')
+            ax.set_xlabel('Distancia Total')
+            ax.set_ylabel('Distancia a SKUs más demandados')
+            ax.set_title('Frente de Pareto Picking (todas las soluciones de slotting)')
+            ax.legend()
+            ax.grid(True)
+            st.pyplot(fig)
+
+            # Mostrar detalles de la mejor solución de cada slotting
+            for idx, res in enumerate(resultados_picking):
+                es_mejor_global = False
+                if best_points:
+                    best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
+                    if idx == best_points[best_overall_idx][2]:
+                        es_mejor_global = True
+                st.markdown(f"#### Solución de slotting {idx+1} {'⭐' if es_mejor_global else ''}")
+                st.write(f"**Mejor individuo:**\n- Distancia total: {res['distancia_total']:.2f}\n- Distancia a SKUs más demandados: {res['sku_distancia']:.2f}\n- Penalización: {'Sí' if res['penalizado'] else 'No'}" + ("\n\n:star: **Esta es la mejor solución global de picking**" if es_mejor_global else ""))
+                st.write("**Rutas de picking por pedido (mejor individuo):**")
+                rutas_best = res['rutas_best']
+                rutas_tabla = pd.DataFrame({
+                    'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
+                    'Ruta': [' → '.join(map(str, ruta)) for ruta in rutas_best]
+                })
+                st.dataframe(rutas_tabla)
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
             st.text(traceback.format_exc())

@@ -233,4 +233,3 @@ def nsga2(
         return pareto_front, pareto_fitness
     else:
         return pop, final_fitness
-
