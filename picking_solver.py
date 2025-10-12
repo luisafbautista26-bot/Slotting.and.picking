@@ -394,15 +394,20 @@ def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks, pop_size=20, n
             for (d, b, p, rutas), ind in zip(population_eval_full, population)
         ]
         pf = pareto_front(population_eval_triples)
-        # Gráfica de Pareto
+        # Gráfica de Pareto: todos los puntos en azul, solo la mejor solución resaltada con estrella
         fig, ax = plt.subplots(figsize=(7,5))
-        for i, dist, sku_dist in pf:
-            ax.scatter(dist, sku_dist, label=f'Ind {i}')
-            ax.text(dist, sku_dist, f'{i}', fontsize=9, ha='right')
+        xs = [dist for _, dist, sku_dist in pf]
+        ys = [sku_dist for _, dist, sku_dist in pf]
+        ax.scatter(xs, ys, color='tab:blue', alpha=0.7)
+        # Mejor solución (menor distancia total)
+        if pf:
+            best_idx = min(pf, key=lambda x: x[1])[0]
+            best_dist = population_eval_triples[best_idx][0]
+            best_sku_dist = population_eval_triples[best_idx][1]
+            ax.scatter([best_dist], [best_sku_dist], color='gold', marker='*', s=200, edgecolor='black', label='Mejor')
         ax.set_xlabel('Distancia Total')
         ax.set_ylabel('Distancia a SKUs más demandados')
         ax.set_title(f'Pareto Picking - Solución Slotting {idx+1}')
-        ax.legend()
         ax.grid(True)
         # Rutas por pedido para el mejor individuo (menor distancia total)
         best_idx = min(pf, key=lambda x: x[1])[0] if pf else 0
