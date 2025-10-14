@@ -229,25 +229,28 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
             )
             st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
 
-            # Unificar la gráfica de Pareto de todas las soluciones
+            # Unificar la gráfica de Pareto de todas las soluciones: todos los puntos en azul, mejor solución con estrella dorada
             fig, ax = plt.subplots(figsize=(7,5))
-            colores = plt.cm.tab10.colors
+            all_f1, all_f2 = [], []
             best_points = []
             for idx, res in enumerate(resultados_picking):
                 pf = res['pareto_front']
                 f1 = [x[1] for x in pf]
                 f2 = [x[2] for x in pf]
-                ax.scatter(f1, f2, label=f'Slotting {idx+1}', color=colores[idx % len(colores)], s=60, alpha=0.6)
-                # Resaltar la mejor solución de cada slotting
+                all_f1.extend(f1)
+                all_f2.extend(f2)
+                # Mejor de cada slotting
                 best_idx = min(pf, key=lambda x: x[1])[0] if pf else 0
                 best_f1 = res['population_eval_triples'][best_idx][0]
                 best_f2 = res['population_eval_triples'][best_idx][1]
                 best_points.append((best_f1, best_f2, idx))
-            # Dibujar la mejor solución de todas (la más cercana al ideal)
+            # Todos los puntos en azul
+            ax.scatter(all_f1, all_f2, color='tab:blue', s=60, alpha=0.7, label='Soluciones Pareto')
+            # Mejor solución global con estrella dorada
             if best_points:
                 best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
                 best_f1, best_f2, best_idx = best_points[best_overall_idx]
-                ax.scatter([best_f1], [best_f2], color='red', s=120, marker='*', label='Mejor global')
+                ax.scatter([best_f1], [best_f2], color='gold', s=180, marker='*', edgecolor='black', label='Mejor global')
             ax.set_xlabel('Distancia Total')
             ax.set_ylabel('Distancia a SKUs más demandados')
             ax.set_title('Frente de Pareto Picking (todas las soluciones de slotting)')
