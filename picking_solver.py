@@ -32,7 +32,13 @@ def route_for_order(order, slot_assignment_row, Vm, VU, slot_to_rack, start_rack
                     racks_needed.add(slot_to_rack[slot])
                     if demanda <= 0:
                         break
-    racks_needed = list(racks_needed)
+    # Evitar que la primera parada sea un punto de descarga: filtrar racks que sean discharge
+    orig_racks = list(racks_needed)
+    racks_needed = [r for r in orig_racks if r not in DISCHARGE_POINTS]
+    # Si tras filtrar no queda ningún rack (todos eran puntos de descarga), devolvemos una subruta vacía
+    # para evitar el recorrido 0 -> discharge (se penalizará si no hay pickups reales)
+    if not racks_needed:
+        return [0, 0]
     route = []
     current = start_rack
     while racks_needed:
@@ -107,30 +113,41 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, D_racks, slot_to
     order_demands = [dict((sku, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders]
     num_orders = len(orders)
 
+    # Flag para saber si se recogió algo desde el último punto de descarga
+    pickups_since_last = False
+
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
-            if new_genome[-1] not in DISCHARGE_POINTS:
-                last_rack = current_rack
-                nearest_discharge = min(DISCHARGE_POINTS, key=lambda dp: D_racks[last_rack, dp])
-                new_genome.append(nearest_discharge)
-                current_rack = nearest_discharge
-                box_vol = 0.0
+            # Sólo insertar un punto de descarga si entre el último discharge (o inicio)
+            # se recogió al menos un item
+            if pickups_since_last:
+                if new_genome[-1] not in DISCHARGE_POINTS:
+                    last_rack = current_rack
+                    nearest_discharge = min(DISCHARGE_POINTS, key=lambda dp: D_racks[last_rack, dp])
+                    new_genome.append(nearest_discharge)
+                    current_rack = nearest_discharge
+                    box_vol = 0.0
+            # Siempre añadimos el separador de pedido (0)
             new_genome.append(0)
             order_idx += 1
             current_rack = start_rack
             box_vol = 0.0
+            pickups_since_last = False
             i += 1
             continue
         new_genome.append(rack)
         current_rack = rack
         if order_idx < num_orders:
             demand = order_demands[order_idx]
+            picked_any = False
             for slot in range(len(slot_assignment_row)):
                 sku = slot_assignment_row[slot]
                 if slot_to_rack[slot] == rack and sku in demand and slot not in DISCHARGE_POINTS and demand[sku] > 0:
                     unit_vol = VU[sku]
                     qty_to_pick = demand[sku]
+                    if qty_to_pick > 0:
+                        picked_any = True
                     for _ in range(qty_to_pick):
                         if box_vol + unit_vol > box_volume_max:
                             nearest_discharge = min(DISCHARGE_POINTS, key=lambda dp: D_racks[current_rack, dp])
@@ -139,6 +156,8 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, D_racks, slot_to
                             box_vol = 0.0
                         box_vol += unit_vol
                     demand[sku] = 0
+            if picked_any:
+                pickups_since_last = True
         i += 1
     filtered_genome = [new_genome[0], new_genome[1]]
     for i in range(2, len(new_genome)):
