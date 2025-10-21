@@ -5,6 +5,9 @@ import matplotlib.pyplot as plt
 
 __all__ = ["nsga2_picking_streamlit"]
 
+# Default Vm (volume capacity per slot)
+DEFAULT_VM_PER_SLOT = 3
+
 # ----------------------------
 # HV utilities (2D minimization)
 # ----------------------------
@@ -150,16 +153,23 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     orders_arr = np.array(orders)
     order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     num_orders = len(order_demands)
+    # flag: whether we've picked any item since the last discharge
+    pickups_since_last = False
 
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
-            # before closing order, insert nearest discharge if last wasn't discharge
-            if new_genome[-1] not in DISCHARGE_RACKS:
-                nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
-                new_genome.append(nearest_discharge)
-                current_rack = nearest_discharge
-                box_vol = 0.0
+            # before closing order, insert nearest discharge if we picked since last discharge
+            if pickups_since_last and DISCHARGE_RACKS:
+                # avoid inserting duplicate discharge if already last
+                if new_genome[-1] not in DISCHARGE_RACKS:
+                    nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+                    new_genome.append(nearest_discharge)
+                    current_rack = nearest_discharge
+                    box_vol = 0.0
+                # after discharging, reset pickup flag
+                pickups_since_last = False
+            # append order separator
             new_genome.append(0)
             order_idx += 1
             current_rack = start_rack
@@ -167,12 +177,14 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
             i += 1
             continue
 
+        # visit this rack
         new_genome.append(rack)
         current_rack = rack
 
+        # simulate picks at this rack: scan slots that belong to this rack
+        picks_this_rack = 0
         if order_idx < num_orders:
             demand = order_demands[order_idx]
-            # simulate picks at this rack: scan slots that belong to this rack
             for slot_idx, sku in enumerate(slot_assignment_row):
                 if slot_to_rack_local[slot_idx] != rack:
                     continue
@@ -183,14 +195,33 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                     continue
                 qty_to_pick = demand[sku_id]
                 unit_vol = VU_map.get(sku_id, 0.0)
+                # pick items one by one, discharging when needed
                 for _ in range(qty_to_pick):
+                    if unit_vol <= 0:
+                        # cannot pick this SKU (volume zero), skip
+                        continue
                     if box_vol + unit_vol > box_volume_max:
-                        nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
-                        new_genome.append(nearest_discharge)
-                        current_rack = nearest_discharge
-                        box_vol = 0.0
+                        # need to discharge before picking
+                        if DISCHARGE_RACKS:
+                            # avoid duplicate consecutive discharge
+                            if new_genome[-1] not in DISCHARGE_RACKS:
+                                nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+                                new_genome.append(nearest_discharge)
+                                current_rack = nearest_discharge
+                                box_vol = 0.0
+                                # after discharge, we haven't picked yet
+                                pickups_since_last = False
+                        else:
+                            # no discharge defined: reset box anyway
+                            box_vol = 0.0
+                    # pick into box
                     box_vol += unit_vol
+                    picks_this_rack += 1
+                # mark demand as satisfied at this rack
                 demand[sku_id] = 0
+        # if we picked anything at this rack, mark that we've had pickups since last discharge
+        if picks_this_rack > 0:
+            pickups_since_last = True
         i += 1
 
     filtered = [new_genome[0], new_genome[1]]
@@ -655,7 +686,7 @@ def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, po
     results = []
     for idx, slot_assignment in enumerate(slot_assignments):
         NUM_SLOTS = slot_assignment.shape[0]
-        Vm = np.full(NUM_SLOTS, 3)
+        Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
         slot_to_rack_local = np.argmax(Sr, axis=1).tolist()
         prohibited = list(range(4))
         discharge_racks = sorted(set(slot_to_rack_local[s] for s in prohibited))
@@ -876,7 +907,7 @@ def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks, pop_size=20, n
     """
     resultados = []
     NUM_SLOTS = slot_assignments[0].shape[0]
-    Vm = np.full(NUM_SLOTS, 3)
+    Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
     START_RACK = 0
     DISCHARGE_POINTS = [1, 2, 3]
     orders = np.array(D)
