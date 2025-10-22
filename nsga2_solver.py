@@ -11,8 +11,14 @@ def calcular_required_slots(D, VU, Vm):
     demand_total = D.sum(axis=0)
     required_slots = {}
     for sku_idx in range(D.shape[1]):
-        sku_id = sku_idx  # Corregido: los índices deben coincidir con VU y D
-        required_slots[sku_id] = math.ceil(demand_total[sku_idx] * VU[sku_id] / Vm)
+        # Usamos convención 1-based para SKU ids: sku_id = sku_idx + 1
+        sku_id = sku_idx + 1
+        # VU puede ser array-like 0-based (VU[0] -> sku 1) o dict con keys 1-based
+        if isinstance(VU, dict):
+            vu_val = float(VU.get(sku_id, 0.0))
+        else:
+            vu_val = float(VU[sku_idx])
+        required_slots[sku_id] = math.ceil(demand_total[sku_idx] * vu_val / Vm)
     return required_slots
 
 def get_rack_for_slot(slot_idx, rack_assignment):
@@ -62,10 +68,11 @@ def fitness(ind, required_slots, NUM_SKUS, D, VU, Vm, rack_assignment, D_racks, 
     num_pedidos = D.shape[0]
     for pedido_idx in range(num_pedidos):
         for sku_idx in range(NUM_SKUS):
+            # sku_id en la convención 1-based
             sku_id = sku_idx + 1
             demanda = D[pedido_idx, sku_idx]
             if demanda > 0:
-                sku_slots = [slot for slot, sku_val in enumerate(ind) if sku_val == sku_id]
+                sku_slots = [slot for slot, sku_val in enumerate(ind) if int(sku_val) == sku_id]
                 if not sku_slots:
                     penalty += demanda * 1000
                 else:
@@ -186,8 +193,13 @@ def nsga2(
     all_assignments = []
     demand_total = D.sum(axis=0)
     for sku_idx in range(NUM_SKUS):
-        sku_id = sku_idx  # Corregido: los índices deben coincidir con VU y D
-        count = math.ceil(demand_total[sku_idx] * VU[sku_id] / Vm)
+        # usar sku_id 1-based
+        sku_id = sku_idx + 1
+        if isinstance(VU, dict):
+            vu_val = float(VU.get(sku_id, 0.0))
+        else:
+            vu_val = float(VU[sku_idx])
+        count = math.ceil(demand_total[sku_idx] * vu_val / Vm)
         all_assignments.extend([sku_id] * count)
     usable_slots = NUM_SLOTS - len(PROHIBITED_SLOTS)
     if len(all_assignments) < usable_slots:

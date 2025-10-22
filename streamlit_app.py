@@ -165,6 +165,7 @@ if st.button("Ejecutar optimización"):
         - **f2 (Costo de picking):** El costo total de recoger los productos, considerando la distancia y la demanda (menos es mejor).
         Cada punto azul en la gráfica es una solución eficiente (óptima en el sentido de Pareto).
         """)
+        st.markdown("**Nota:** en la optimización de picking los puntos de descarga están fijados a los racks [1, 2, 3] y el punto de inicio es el rack 0.")
         f1_vals = [f[0] for f in pareto_fitness]
         f2_vals = [f[1] for f in pareto_fitness]
         fig, ax = plt.subplots(figsize=(7,5))
@@ -206,6 +207,13 @@ if st.button("Ejecutar optimización"):
     except Exception as e:
         st.error(f"Error en la ejecución: {e}")
         st.text(traceback.format_exc())
+
+    # Mostrar valores efectivos del módulo de picking (ayuda a verificar el estado en tiempo de ejecución)
+    try:
+        import picking_solver
+        st.info(f"Valores en picking_solver: DISCHARGE_RACKS = {picking_solver.DISCHARGE_RACKS}, DEFAULT_VM_PER_SLOT = {picking_solver.DEFAULT_VM_PER_SLOT}, start_rack = 0")
+    except Exception as e:
+        st.warning("No se pudo importar 'picking_solver' para verificar valores en tiempo de ejecución. Si la app está ejecutándose desde antes de los cambios, reinicia Streamlit para cargar las modificaciones.")
 
 # --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
 if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:

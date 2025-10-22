@@ -1,0 +1,804 @@
+import numpy as np
+import random
+import math
+from collections import defaultdict
+
+# ============================
+# === Parámetros del problema
+# ============================
+
+# Capacidad máxima por slot
+Vm = 3
+
+# Volumen unitario por SKU (corregido: diccionario en lugar de set)
+VU = {1: 0.98,
+    2: 0.32,
+    3: 0.10,
+    4: 0.51,
+    5: 0.81,
+    6: 0.63,
+    7: 0.34,
+    8: 0.34,
+    9: 0.74,
+    10: 0.43,
+    11: 0.50,
+    12: 0.39,
+    13: 0.32,
+    14: 0.69,
+    15: 0.43,
+    16: 0.28,
+    17: 0.86,
+    18: 0.38,
+    19: 0.36,
+    20: 0.85,
+    21: 0.81,
+    22: 0.07,
+    23: 0.67,
+    24: 0.36,
+    25: 0.13,
+    26: 0.97,
+    27: 0.66,
+    28: 0.39,
+    29: 0.13,
+    30: 0.83,
+    31: 0.07,
+    32: 0.26,
+    33: 0.03,
+    34: 0.38,
+    35: 0.97,
+    36: 0.93,
+    37: 0.19,
+    38: 0.73,
+    39: 0.20,
+    40: 0.12,
+    41: 0.57,
+    42: 0.32,
+ }
+
+# Matriz de demanda (pedidos x SKUs)
+D = np.array([
+    [6,5,4,1,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], #Pedido 1
+    [0,0,0,0,0,0,0,7,6,2,1,4,4,5,3,6,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,7,6,7,3,3,2,7,2,7,5,4,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,1,7,7,1,2,2,3,7,2,7,3,4],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,2,0,0,4,0,0,0,0,6,0,0,0,0,0,0],
+    [0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,0,2,0,0,5,0,7,0,0,0,3],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,3,6,3,0,2,0,2,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,7,5,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,5,4,0,7,0,4,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,3,1,0,1,3,6,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,2,0,0,0,5,0,7,0,4,6,0,0,0,0,1,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3] #Pedido 15
+])
+
+# Slots totales (ejemplo: 16)
+NUM_SLOTS = 189
+# Slots prohibidos (inicio y descargas)
+PROHIBITED_SLOTS = {0, 1, 2, 3}
+NUM_SKUS = D.shape[1]  # 42 SKUs
+
+# Matriz de racks por slot (Sr) - corregido: cada fila indica el rack del slot
+# Asumiendo que slots 0-3: racks 0-3, slots 4-9: rack 4, slots 10-15: rack 5
+Sr = np.array([
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]
+])
+
+rack_assignment = np.argmax(Sr, axis=1)
+rack_assignment = rack_assignment[:NUM_SLOTS]  # Asegurar longitud correcta
+
+# Matriz de distancias entre racks (6 racks: 0-5)
+D_racks = np.array([
+    [0,36.55,58.15,92.4,92.35,94.85,92.45,89.2,90.05,92.55,86.7,87.65,90.15,84.2,82.75,85.25,87.75,81.7,80.35,85.35,77.95,80.45,82.95,75.55,78.05,80.55,74.2,73.15,78.15,73.25],
+    [36.55,0,24.55,58.8,58.75,61.25,58.85,56.7,56.45,58.95,54.2,54.05,56.55,51.7,49.15,51.65,54.15,49.2,46.75,51.75,44.35,46.85,49.35,41.95,44.45,46.95,41.7,39.55,44.55,39.65],
+    [58.15,24.55,0,37.2,37.15,39.65,37.25,36.7,34.85,37.35,34.2,32.45,34.95,31.7,27.55,30.05,32.55,29.2,25.15,30.15,22.75,25.25,27.75,20.35,22.85,25.35,21.7,17.95,22.95,18.05],
+    [92.4,58.8,37.2,0,6,8.5,9.125,15.5,10.65,13.15,18,12.6,15.1,20.5,12.2,14.7,17.2,23,18,23,20.4,22.9,25.4,22.8,25.3,27.8,30.5,25.2,30.2,30.1],
+    [92.35,58.75,37.15,6,0,1.7,7.85,8.7,10.25,12.75,11.2,12.65,15.15,13.7,12.55,15.05,17.55,16.2,14.95,19.95,17.35,19.85,22.35,19.75,22.25,24.75,23.7,22.15,27.15,27.05],
+    [94.85,61.25,39.65,8.5,1.7,0,10.35,6.2,12.75,10.25,8.7,15.15,12.65,11.2,15.05,17.55,15.05,13.7,17.45,17.45,19.85,22.35,19.85,22.25,24.75,22.25,21.2,24.65,24.65,29.55],
+    [92.45,58.85,37.25,9.125,7.85,10.35,0,5.45,10.35,7.85,6.2,12.75,10.25,8.7,12.65,15.15,12.65,11.2,15.05,15.05,17.45,19.95,17.45,19.85,22.35,19.85,18.7,22.25,22.25,27.15],
+    [89.2,56.7,36.7,15.5,8.7,6.2,5.45,0,6.2,3.7,1.7,8.7,6.2,4.2,13.7,11.2,8.7,6.7,16.2,11.2,18.7,16.2,13.7,21.2,18.7,16.2,14.2,23.7,18.7,23.7],
+    [90.05,56.45,34.85,10.65,10.25,12.75,10.35,6.2,0,1.7,5.45,10.35,7.85,6.2,10.25,12.75,10.25,8.7,12.65,12.65,15.05,17.55,15.05,17.45,19.95,17.45,16.2,19.85,19.85,24.75],
+    [92.55,58.95,37.35,13.15,12.75,10.25,7.85,3.7,1.7,0,2.95,7.85,5.35,3.7,12.75,10.25,7.75,6.2,15.15,10.15,17.55,15.05,12.55,19.95,17.45,14.95,13.7,22.35,17.35,22.25],
+    [86.7,54.2,34.2,18,11.2,8.7,6.2,1.7,5.45,2.95,0,6.2,3.7,1.7,11.2,8.7,6.2,4.2,13.7,8.7,16.2,13.7,11.2,18.7,16.2,13.7,11.7,21.2,16.2,21.2],
+    [87.65,54.05,32.45,12.6,12.65,15.15,12.75,8.7,10.35,7.85,6.2,0,1.7,5.45,7.85,10.35,7.85,6.2,10.25,10.25,12.65,15.15,12.65,15.05,17.55,15.05,13.7,17.45,17.45,22.35],
+    [90.15,56.55,34.95,15.1,15.15,12.65,10.25,6.2,7.85,5.35,3.7,1.7,0,2.95,10.35,7.85,5.35,3.7,12.75,7.75,15.15,12.65,10.15,17.55,15.05,12.55,11.2,19.95,14.95,19.85],
+    [84.2,51.7,31.7,20.5,13.7,11.2,8.7,4.2,6.2,3.7,1.7,5.45,2.95,0,8.7,6.2,3.7,1.7,11.2,6.2,13.7,11.2,8.7,16.2,13.7,11.2,9.2,18.7,13.7,18.7],
+    [82.75,49.15,27.55,12.2,12.55,15.05,12.65,13.7,10.25,12.75,11.2,7.85,10.35,8.7,0,1.7,4.2,7.95,5.35,10.35,7.75,10.25,12.75,10.15,12.65,15.15,13.7,12.55,17.55,17.45],
+    [85.25,51.65,30.05,14.7,15.05,17.55,15.15,11.2,12.75,10.25,8.7,10.35,7.85,6.2,1.7,0,1.7,5.45,7.85,7.85,10.25,12.75,10.25,12.65,15.15,12.65,11.2,15.05,15.05,19.95],
+    [87.75,54.15,32.55,17.2,17.55,15.05,12.65,8.7,10.25,7.75,6.2,7.85,5.35,3.7,4.2,1.7,0,2.95,10.35,5.35,12.75,10.25,7.75,15.15,12.65,10.15,8.7,17.55,12.55,17.45],
+    [81.7,49.2,29.2,23,16.2,13.7,11.2,6.7,8.7,6.2,4.2,6.2,3.7,1.7,7.95,5.45,2.95,0,8.7,3.7,11.2,8.7,6.2,13.7,11.2,8.7,6.7,16.2,11.2,16.2],
+    [80.35,46.75,25.15,18,14.95,17.45,15.05,16.2,12.65,15.15,13.7,10.25,12.75,11.2,5.35,7.85,10.35,8.7,0,4.2,5.35,7.85,10.35,7.75,10.25,12.75,11.2,10.15,15.15,15.05],
+    [85.35,51.75,30.15,23,19.95,17.45,15.05,11.2,12.65,10.15,8.7,10.25,7.75,6.2,10.35,7.85,5.35,3.7,4.2,0,10.35,7.85,5.35,12.75,10.25,7.75,6.2,15.15,10.15,15.05],
+    [77.95,44.35,22.75,20.4,17.35,19.85,17.45,18.7,15.05,17.55,16.2,12.65,15.15,13.7,7.75,10.25,12.75,11.2,5.35,10.35,0,1.7,4.2,5.35,7.85,10.35,8.7,7.75,12.75,12.65],
+    [80.45,46.85,25.25,22.9,19.85,22.35,19.95,16.2,17.55,15.05,13.7,15.15,12.65,11.2,10.25,12.75,10.25,8.7,7.85,7.85,1.7,0,1.7,7.85,10.35,7.85,6.2,10.25,10.25,15.15],
+    [82.95,49.35,27.75,25.4,22.35,19.85,17.45,13.7,15.05,12.55,11.2,12.65,10.15,8.7,12.75,10.25,7.75,6.2,10.35,5.35,4.2,1.7,0,10.35,7.85,5.35,3.7,12.75,7.75,12.65],
+    [75.55,41.95,20.35,22.8,19.75,22.25,19.85,21.2,17.45,19.95,18.7,15.05,17.55,16.2,10.15,12.65,15.15,13.7,7.75,12.75,5.35,7.85,10.35,0,1.7,4.2,7.95,5.35,10.35,10.25],
+    [78.05,44.45,22.85,25.3,22.25,24.75,22.35,18.7,19.95,17.45,16.2,17.55,15.05,13.7,12.65,15.15,12.65,11.2,10.25,10.25,7.85,10.35,7.85,1.7,0,1.7,5.45,7.85,7.85,12.75],
+    [80.55,46.95,25.35,27.8,24.75,22.25,19.85,16.2,17.45,14.95,13.7,15.05,12.55,11.2,15.15,12.65,10.15,8.7,12.75,7.75,10.35,7.85,5.35,4.2,1.7,0,2.95,10.35,5.35,10.25],
+    [74.2,41.7,21.7,30.5,23.7,21.2,18.7,14.2,16.2,13.7,11.7,13.7,11.2,9.2,13.7,11.2,8.7,6.7,11.2,6.2,8.7,6.2,3.7,7.95,5.45,2.95,0,8.7,3.7,8.7],
+    [73.15,39.55,17.95,25.2,22.15,24.65,22.25,23.7,19.85,22.35,21.2,17.45,19.95,18.7,12.55,15.05,17.55,16.2,10.15,15.15,7.75,10.25,12.75,5.35,7.85,10.35,8.7,0,4.2,4.1],
+    [78.15,44.55,22.95,30.2,27.15,24.65,22.25,18.7,19.85,17.35,16.2,17.45,14.95,13.7,17.55,15.05,12.55,11.2,15.15,10.15,12.75,10.25,7.75,10.35,7.85,5.35,3.7,4.2,0,4.1],
+    [73.25,39.65,18.05,30.1,27.05,29.55,27.15,23.7,24.75,22.25,21.2,22.35,19.85,18.7,17.45,19.95,17.45,16.2,15.05,15.05,12.65,15.15,12.65,10.25,12.75,10.25,8.7,4.1,4.1,0]
+
+])
+
+# =========================================
+# === Preprocesamiento: demanda por SKU ===
+# =========================================
+
+# Demanda total de cada SKU (suma vertical de columnas)
+demand_total = D.sum(axis=0)
+
+# Slots requeridos por SKU (SKUs indexados desde 1)
+required_slots = {}
+for sku_idx in range(NUM_SKUS):
+    sku_id = sku_idx + 1
+    required_slots[sku_id] = math.ceil(demand_total[sku_idx] * VU[sku_id] / Vm)
+
+print("Demanda total:", demand_total)
+print("Slots requeridos por SKU:", required_slots)
+
+# Lista completa de asignaciones necesarias
+all_assignments = []
+for sku, count in required_slots.items():
+    all_assignments.extend([sku] * count)
+
+# Si hay menos asignaciones que slots disponibles → rellenar con vacíos
+usable_slots = NUM_SLOTS - len(PROHIBITED_SLOTS)
+if len(all_assignments) < usable_slots:
+    all_assignments.extend([0] * (usable_slots - len(all_assignments)))  # 0 = vacío
+
+# ====================================
+# === Funciones auxiliares
+# ====================================
+
+def get_rack_for_slot(slot_idx):
+    """Devuelve el rack correspondiente a un slot."""
+    return rack_assignment[slot_idx]
+
+def get_distance_between_racks(rack1, rack2):
+    """Devuelve la distancia entre dos racks."""
+    return D_racks[rack1, rack2]
+
+def init_individual():
+    """Inicializa un individuo respetando las necesidades de slots."""
+    genes = all_assignments.copy()
+    random.shuffle(genes)
+
+    # Insertar genes en slots válidos (dejando prohibidos como vacíos)
+    ind = np.zeros(NUM_SLOTS, dtype=int)  # 0 = vacío
+
+    g_idx = 0
+    for slot in range(NUM_SLOTS):
+        if slot in PROHIBITED_SLOTS:
+            ind[slot] = 0  # vacío
+        else:
+            ind[slot] = genes[g_idx]
+            g_idx += 1
+
+    return ind
+
+def fitness(ind):
+    """Calcula (f1, f2) para un individuo - AMBAS PARA MINIMIZACIÓN."""
+    f1, f2 = 0, 0
+    penalty = 0
+
+    # === Verificación de restricciones ===
+    # Contar slots asignados por SKU
+    slot_counts = defaultdict(int)
+    for sku in ind:
+        if sku > 0:  # Ignorar slots vacíos
+            slot_counts[sku] += 1
+
+    # Penalizar por no cumplir con los slots requeridos
+    for sku, required in required_slots.items():
+        if slot_counts[sku] < required:
+            penalty += (required - slot_counts[sku]) * 1000
+
+    # === f1: Dispersión (distancia entre racks del mismo SKU) - MINIMIZAR ===
+    sku_racks = defaultdict(list)
+    for slot, sku in enumerate(ind):
+        if sku > 0:  # SKU válido
+            rack = get_rack_for_slot(slot)
+            sku_racks[sku].append(rack)
+
+    for sku, racks in sku_racks.items():
+        if len(racks) > 1:
+            # Calcular distancia promedio entre racks para este SKU
+            total_dist = 0
+            count = 0
+            for i in range(len(racks)):
+                for j in range(i + 1, len(racks)):
+                    total_dist += get_distance_between_racks(racks[i], racks[j])
+                    count += 1
+            if count > 0:
+                f1 += total_dist / count
+
+    # === f2: Costo de picking (distancia * demanda) - MINIMIZAR ===
+    num_pedidos = D.shape[0]
+    for pedido_idx in range(num_pedidos):
+        for sku_idx in range(NUM_SKUS):
+            sku_id = sku_idx + 1
+            demanda = D[pedido_idx, sku_idx]
+
+            if demanda > 0:
+                # Encontrar todos los slots con este SKU
+                sku_slots = [slot for slot, sku_val in enumerate(ind) if sku_val == sku_id]
+
+                if not sku_slots:
+                    penalty += demanda * 1000  # Penalizar SKU no asignado
+                else:
+                    # Encontrar el slot más cercano al punto inicial (rack 0)
+                    min_distance = float('inf')
+                    for slot in sku_slots:
+                        rack = get_rack_for_slot(slot)
+                        distance = get_distance_between_racks(0, rack)  # Distancia desde rack inicial
+                        min_distance = min(min_distance, distance)
+
+                    f2 += demanda * min_distance
+
+    # Aplicar penalizaciones (aumentan el valor, por lo que empeoran el fitness)
+    f1 += penalty
+    f2 += penalty
+
+    return (f1, f2)
+
+def dominates(fitness1, fitness2):
+    """Determina si fitness1 domina a fitness2 para MINIMIZACIÓN."""
+    # Para minimización: f1 domina a f2 si f1 es mejor o igual en todos los objetivos
+    # y estrictamente mejor en al menos uno
+    better_or_equal = (fitness1[0] <= fitness2[0] and fitness1[1] <= fitness2[1])
+    strictly_better = (fitness1[0] < fitness2[0] or fitness1[1] < fitness2[1])
+    return better_or_equal and strictly_better
+
+# =============================
+# === Operadores genéticos ====
+# =============================
+
+def crossover_uniform(p1, p2, px):
+    n = len(p1)
+    child = np.zeros(n, dtype=int)
+    mask = np.random.rand(n) < px
+    child[mask] = p1[mask]
+    child[~mask] = p2[~mask]
+    return repair(child)
+
+def mutate_swap(ind, pm):
+    ind = ind.copy()
+    if random.random() < pm:
+        # Seleccionar solo slots no prohibidos
+        valid_slots = [s for s in range(NUM_SLOTS) if s not in PROHIBITED_SLOTS]
+        if len(valid_slots) >= 2:
+            i, j = random.sample(valid_slots, 2)
+            ind[i], ind[j] = ind[j], ind[i]
+    return repair(ind)
+
+def repair(ind):
+    """Repara un individuo para cumplir con los slots requeridos."""
+    ind = ind.copy()
+
+    # Contar slots actuales por SKU
+    current_counts = defaultdict(int)
+    for sku in ind:
+        if sku > 0:
+            current_counts[sku] += 1
+
+    # Quitar excedentes
+    for sku in list(current_counts.keys()):
+        required = required_slots.get(sku, 0)
+        if current_counts[sku] > required:
+            # Encontrar slots con este SKU
+            sku_slots = [i for i, val in enumerate(ind) if val == sku and i not in PROHIBITED_SLOTS]
+            excess = current_counts[sku] - required
+
+            # Marcar slots excedentes como vacíos
+            for i in range(excess):
+                if i < len(sku_slots):
+                    ind[sku_slots[i]] = 0
+
+    # Agregar faltantes
+    for sku, required in required_slots.items():
+        current = sum(1 for val in ind if val == sku)
+        if current < required:
+            # Encontrar slots vacíos no prohibidos
+            empty_slots = [i for i, val in enumerate(ind) if val == 0 and i not in PROHIBITED_SLOTS]
+            needed = required - current
+
+            for i in range(min(needed, len(empty_slots))):
+                ind[empty_slots[i]] = sku
+
+    return ind
+
+# ==================================
+# === Núcleo del algoritmo NSGA-II
+# ==================================
+
+def non_dominated_sort(population):
+    """Implementa el non-dominated sort de NSGA-II para MINIMIZACIÓN."""
+    population_size = len(population)
+
+    # Calcular fitness para todos los individuos
+    fitness_values = [fitness(ind) for ind in population]
+
+    # Inicializar estructuras
+    S = [[] for _ in range(population_size)]  # Conjunto de soluciones dominadas por i
+    n = [0] * population_size  # Contador de cuántas soluciones dominan a i
+    rank = [0] * population_size  # Frente de cada solución
+    fronts = [[]]  # Lista de frentes
+
+    # Paso 1: Calcular dominancias
+    for i in range(population_size):
+        for j in range(population_size):
+            if i != j:
+                if dominates(fitness_values[i], fitness_values[j]):
+                    S[i].append(j)  # i domina a j
+                elif dominates(fitness_values[j], fitness_values[i]):
+                    n[i] += 1  # j domina a i
+
+        if n[i] == 0:
+            rank[i] = 0
+            fronts[0].append(i)
+
+    # Paso 2: Construir frentes sucesivos
+    i = 0
+    while fronts[i]:
+        next_front = []
+        for p in fronts[i]:
+            for q in S[p]:
+                n[q] -= 1
+                if n[q] == 0:
+                    rank[q] = i + 1
+                    next_front.append(q)
+        i += 1
+        if next_front:
+            fronts.append(next_front)
+        else:
+            break
+
+    return fronts, fitness_values
+
+def crowding_distance_assignment(front, fitness_values):
+    """Calcula la crowding distance para un frente - para MINIMIZACIÓN."""
+    size = len(front)
+    distances = [0.0] * size
+
+    if size == 0:
+        return distances
+
+    # Para cada objetivo (ambos para minimización)
+    for m in range(2):
+        # Ordenar por el objetivo m (de menor a mayor para minimización)
+        sorted_indices = sorted(range(size), key=lambda i: fitness_values[front[i]][m])
+
+        # Establecer distancias infinitas para los extremos (mejores soluciones)
+        distances[sorted_indices[0]] = float('inf')
+        distances[sorted_indices[-1]] = float('inf')
+
+        # Calcular crowding distance para los puntos intermedios
+        f_min = fitness_values[front[sorted_indices[0]]][m]
+        f_max = fitness_values[front[sorted_indices[-1]]][m]
+
+        if abs(f_max - f_min) > 1e-10:  # Evitar división por cero
+            for i in range(1, size - 1):
+                idx = sorted_indices[i]
+                prev_fitness = fitness_values[front[sorted_indices[i-1]]][m]
+                next_fitness = fitness_values[front[sorted_indices[i+1]]][m]
+
+                distances[idx] += (next_fitness - prev_fitness) / (f_max - f_min)
+
+    return distances
+
+def selection_tournament(population, fitness_values, fronts, crowding_distances, tournament_size=2):
+    """Selección por torneo basado en rank y crowding distance para MINIMIZACIÓN."""
+    selected = []
+    population_size = len(population)
+
+    # Crear mapping de individuo a frente y crowding distance
+    front_map = {}
+    crowding_map = {}
+    for front_idx, front in enumerate(fronts):
+        for i, individual_idx in enumerate(front):
+            front_map[individual_idx] = front_idx
+            crowding_map[individual_idx] = crowding_distances[front_idx][i]
+
+    while len(selected) < population_size:
+        # Seleccionar individuos aleatorios para el torneo
+        contestants = random.sample(range(population_size), tournament_size)
+
+        # Seleccionar el mejor basado en frente (menor es mejor) y crowding distance (mayor es mejor)
+        best = contestants[0]
+        for contestant in contestants[1:]:
+            # Comparar por frente (frente más bajo = mejor)
+            if front_map[contestant] < front_map[best]:
+                best = contestant
+            elif front_map[contestant] == front_map[best]:
+                # Si están en el mismo frente, comparar por crowding distance (mayor = mejor)
+                if crowding_map[contestant] > crowding_map[best]:
+                    best = contestant
+
+        selected.append(population[best])
+
+    return selected
+
+def nsga2(pop_size, generations, cx_rate, pm_swap, seed, verbose=True):
+    """Algoritmo NSGA-II completo para MINIMIZACIÓN."""
+    random.seed(seed)
+    np.random.seed(seed)
+
+    # Inicializar población
+    pop = [init_individual() for _ in range(pop_size)]
+    pareto_generations = []
+
+    for g in range(generations):
+        # Crear offspring
+        off = []
+        while len(off) < pop_size:
+            p1, p2 = random.sample(pop, 2)
+            child = crossover_uniform(p1, p2, px=cx_rate)
+            child = mutate_swap(child, pm=pm_swap)
+            off.append(child)
+
+        # Combinar población y offspring
+        combined_pop = pop + off
+        combined_fitness = [fitness(ind) for ind in combined_pop]
+
+        # Non-dominated sort
+        fronts, _ = non_dominated_sort(combined_pop)
+
+        # Calcular crowding distance para cada frente
+        crowding_distances = []
+        for front in fronts:
+            if front:
+                crowding_distances.append(crowding_distance_assignment(front, combined_fitness))
+            else:
+                crowding_distances.append([])
+
+        # Seleccionar nueva población (elitismo)
+        new_pop = []
+        remaining = pop_size
+
+        for front_idx, front in enumerate(fronts):
+            if len(front) <= remaining:
+                # Agregar todo el frente
+                new_pop.extend([combined_pop[i] for i in front])
+                remaining -= len(front)
+            else:
+                # Seleccionar los mejores del frente basado en crowding distance
+                front_indices = list(zip(front, crowding_distances[front_idx]))
+                front_indices.sort(key=lambda x: x[1], reverse=True)  # Mayor crowding distance primero
+
+                for i in range(remaining):
+                    new_pop.append(combined_pop[front_indices[i][0]])
+                break
+
+        pop = new_pop
+
+        if verbose and g % 10 == 0:
+            # Estadísticas del frente Pareto
+            if fronts and fronts[0]:
+                front_0_fitness = [combined_fitness[i] for i in fronts[0]]
+                avg_f1 = np.mean([f[0] for f in front_0_fitness])
+                avg_f2 = np.mean([f[1] for f in front_0_fitness])
+                print(f"Gen {g}: Frente size={len(fronts[0])}, Avg f1={avg_f1:.1f}, Avg f2={avg_f2:.1f}")
+
+        # Devolver el frente Pareto final
+        # Calcular el fitness de la población final
+        final_fitness = [fitness(ind) for ind in pop]
+
+        # Ordenar la población por dominancia
+        fronts, _ = non_dominated_sort(pop)
+
+        # ========================
+        # Evaluar los frentes de esta generación
+        # ========================
+
+        pareto_front = []
+        pareto_fitness = []
+
+        if fronts:
+            # Intentar tomar el frente principal (nivel 0)
+            if fronts[0] and len(fronts[0]) < len(combined_pop):
+                valid_indices = [i for i in fronts[0] if i < len(combined_pop)]
+                pareto_front = [combined_pop[i] for i in valid_indices]
+                pareto_fitness = [combined_fitness[i] for i in valid_indices]
+
+                # 🔹 Guardar solo si es un frente real (no vacío ni completo)
+                if pareto_front:
+                    pareto_generations.append((pareto_front, pareto_fitness))
+
+                    if verbose:
+                        print(f"Generación {g}: {len(pareto_front)} soluciones no dominadas (nivel 0)")
+
+            else:
+                # Si fronts[0] está vacío o cubre toda la población, buscar otro frente válido
+                found = False
+                for front in fronts[1:]:
+                    if front and len(front) < len(combined_pop):
+                        valid_indices = [i for i in front if i < len(combined_pop)]
+                        pareto_front = [combined_pop[i] for i in valid_indices]
+                        pareto_fitness = [combined_fitness[i] for i in valid_indices]
+                        found = True
+                        break
+
+                if found:
+                    if verbose:
+                        print(f"Generación {g}: usando frente alternativo (nivel > 0) con {len(pareto_front)} soluciones")
+                else:
+                    if verbose:
+                        print(f"⚠️ Generación {g}: sin frentes válidos (todos vacíos o población completa)")
+
+    #Para las fronteras válidas
+    if pareto_generations:
+        # Evaluar todas las fronteras usando hipervolumen o promedio
+        hv_calc = HV(ref_point=np.max(np.vstack([pf for _, pf in pareto_generations]), axis=0) * 1.2)
+        hv_values = []
+
+        for front, fitnesses in pareto_generations:
+            F = np.array(fitnesses)
+            hv_values.append(hv_calc(F))
+
+        # Seleccionar el frente con mayor hipervolumen (mejor)
+        best_idx = np.argmax(hv_values)
+        pareto_front, pareto_fitness = pareto_generations[best_idx]
+
+        print(f"\n✅ Mejor frente encontrado: generación {best_idx}, hipervolumen = {hv_values[best_idx]:.4f}")
+    else:
+        print("\n⚠️ No se encontraron frentes no dominados en ninguna generación.")
+        pareto_front = 0
+        pareto_fitness = 0
+
+    return pareto_front, pareto_fitness
+
+# =========================
+# === Ejecutar algoritmo
+# =========================
+
+if __name__ == "__main__":
+    print("Ejecutando NSGA-II para minimización de f1 (dispersión) y f2 (costo picking)...")
+    pareto_solutions, pareto_fitness = nsga2(pop_size=200, generations=450, cx_rate=0.4, pm_swap=0.04, seed=None, verbose=True)
+
+    print("\n=== Frente Pareto Óptimo ===")
+    print("(f1 = dispersión, f2 = costo picking - AMBAS PARA MINIMIZAR)")
+    print("=" * 50)
+
+    # Ordenar por f1 para mejor visualización
+    sorted_indices = sorted(range(len(pareto_fitness)), key=lambda i: pareto_fitness[i][0])
+
+    for i, idx in enumerate(sorted_indices):
+        f1, f2 = pareto_fitness[idx]
+        print(f"Sol {i+1}: f1={f1:.1f}, f2={f2:.1f}")
+        #print(f"Asignación: {pareto_solutions[idx]}")
+        print("Asignación:", "[" + ", ".join(map(str, pareto_solutions[idx])) + "]")
+        print("-" * 100)
+
+# === Visualización del frente de Pareto GRAFICAAA===
+import matplotlib.pyplot as plt
+f1_vals = [f[0] for f in pareto_fitness]
+f2_vals = [f[1] for f in pareto_fitness]
+
+plt.figure(figsize=(7,5))
+plt.scatter(f1_vals, f2_vals, c="blue", s=50, label="Soluciones Pareto")
+plt.xlabel("f1 (Dispersión de racks)")
+plt.ylabel("f2 (Costo de picking)")
+plt.title("Frente de Pareto - NSGA-II")
+plt.legend()
+plt.grid(True)
+plt.show()
+#ELEGIR UNA SOLA ASIGNACIÓN SE HACE CON LA DISTANCIA AL PUNTO IDEAL (MÍNIMO f1 Y MÍNIMO f2) Y QUEDARSE CON LA MÁS CERCANA:
+# convertir lista de fitness a array
+fitness_array = np.array(pareto_fitness)
+
+# punto ideal: mejores valores de cada objetivo
+ideal = fitness_array.min(axis=0)
+
+# Distancia Manhattan
+manhattan_distances = np.linalg.norm(fitness_array - ideal, ord=1, axis=1)
+
+# índice de la solución más balanceada
+best_manhattan_idx = np.argmin(manhattan_distances)
+
+print("=== Mejor solución balanceada ===")
+print("Fitness:", pareto_fitness[best_manhattan_idx])
+print("Asignación:", pareto_solutions[best_manhattan_idx])
+
+#MUCHAS SOLUCIONES SIMILARES
+from sklearn.cluster import KMeans
+
+kmeans = KMeans(n_clusters=3, random_state=0).fit(fitness_array)
+labels = kmeans.labels_
+print("=== 3 soluciones representativas ===")
+for cluster in range(2):
+    idx = np.where(labels == cluster)[0][0]  # primera del cluster
+    print(f"\nRepresentante del Cluster {cluster+1}:")
+    print("Fitness:", pareto_fitness[idx])
+    print("Asignación:", pareto_solutions[idx])

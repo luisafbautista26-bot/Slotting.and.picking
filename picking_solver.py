@@ -77,7 +77,8 @@ def make_ref_point_from_fronts(fronts, factor=1.2, require_nondominated=True):
 # Globals set in the loop
 D_racks = None
 VU_map = {}
-DISCHARGE_RACKS = []
+# Forzar puntos de descarga fijos: 1,2,3
+DISCHARGE_RACKS = [1, 2, 3]
 slot_to_rack = []
 PROHIBITED_SLOT_INDICES = []
 
@@ -105,7 +106,8 @@ def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_loc
         for slot_idx, slot_sku in enumerate(slot_assignment_row):
             if int(slot_sku) != sku_id:
                 continue
-            if slot_idx in PROHIBITED_SLOT_INDICES:
+            # evitar slots prohibidos o que pertenezcan a racks de descarga
+            if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
                 continue
             unit_vol = VU_map.get(sku_id, 0.0)
             if unit_vol <= 0:
@@ -153,39 +155,33 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     orders_arr = np.array(orders)
     order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     num_orders = len(order_demands)
-    # flag: whether we've picked any item since the last discharge
-    pickups_since_last = False
 
+    picked_since_sep = False
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
-            # before closing order, insert nearest discharge if we picked since last discharge
-            if pickups_since_last and DISCHARGE_RACKS:
-                # avoid inserting duplicate discharge if already last
-                if new_genome[-1] not in DISCHARGE_RACKS:
-                    nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
-                    new_genome.append(nearest_discharge)
-                    current_rack = nearest_discharge
-                    box_vol = 0.0
-                # after discharging, reset pickup flag
-                pickups_since_last = False
-            # append order separator
+            # antes de cerrar pedido: insertar descarga solo si se hicieron picks desde el último separador
+            if picked_since_sep and new_genome[-1] not in DISCHARGE_RACKS:
+                nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+                new_genome.append(nearest_discharge)
+                current_rack = nearest_discharge
+                box_vol = 0.0
             new_genome.append(0)
             order_idx += 1
             current_rack = start_rack
             box_vol = 0.0
+            picked_since_sep = False
             i += 1
             continue
 
-        # visit this rack
         new_genome.append(rack)
         current_rack = rack
 
-        # simulate picks at this rack: scan slots that belong to this rack
-        picks_this_rack = 0
         if order_idx < num_orders:
             demand = order_demands[order_idx]
+            # simulate picks at this rack: scan slots that belong to this rack
             for slot_idx, sku in enumerate(slot_assignment_row):
+                # saltar slots que no pertenezcan al rack objetivo
                 if slot_to_rack_local[slot_idx] != rack:
                     continue
                 sku_id = int(sku)
@@ -195,35 +191,20 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                     continue
                 qty_to_pick = demand[sku_id]
                 unit_vol = VU_map.get(sku_id, 0.0)
-                # pick items one by one, discharging when needed
+                # marcar que hubo picks en este pedido si vamos a recoger qty_to_pick > 0
+                if qty_to_pick > 0 and unit_vol > 0:
+                    picked_since_sep = True
                 for _ in range(qty_to_pick):
-                    if unit_vol <= 0:
-                        # cannot pick this SKU (volume zero), skip
-                        continue
                     if box_vol + unit_vol > box_volume_max:
-                        # need to discharge before picking
-                        if DISCHARGE_RACKS:
-                            # avoid duplicate consecutive discharge
-                            if new_genome[-1] not in DISCHARGE_RACKS:
-                                nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
-                                new_genome.append(nearest_discharge)
-                                current_rack = nearest_discharge
-                                box_vol = 0.0
-                                # after discharge, we haven't picked yet
-                                pickups_since_last = False
-                        else:
-                            # no discharge defined: reset box anyway
-                            box_vol = 0.0
-                    # pick into box
+                        nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+                        new_genome.append(nearest_discharge)
+                        current_rack = nearest_discharge
+                        box_vol = 0.0
                     box_vol += unit_vol
-                    picks_this_rack += 1
-                # mark demand as satisfied at this rack
                 demand[sku_id] = 0
-        # if we picked anything at this rack, mark that we've had pickups since last discharge
-        if picks_this_rack > 0:
-            pickups_since_last = True
         i += 1
 
+    # clean duplicates
     filtered = [new_genome[0], new_genome[1]]
     for j in range(2, len(new_genome)):
         if new_genome[j] in DISCHARGE_RACKS and filtered[-1] == new_genome[j]:
@@ -278,6 +259,7 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
         if order_idx < len(order_demands):
             demand = order_demands[order_idx]
             for slot_idx, sku in enumerate(slot_assignments[genome[0]]):
+                # saltar slots que no pertenezcan al rack objetivo
                 if slot_to_rack_local[slot_idx] != rack:
                     continue
                 sku_id = int(sku)
@@ -426,11 +408,12 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
     global D_racks, VU_map, slot_to_rack, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
     D_racks = D_racks_array
     slot_to_rack = slot_to_rack_local
-    DISCHARGE_RACKS = DISCHARGE_RACKS_input
+    # Forzar puntos de descarga fijos: 1,2,3
+    DISCHARGE_RACKS = [1, 2, 3]
     VU_map = {i+1: float(VU_array[i]) for i in range(len(VU_array))}
 
-    # Prohibited slots: first 4 slots
-    PROHIBITED_SLOT_INDICES = list(range(4))
+    # Prohibited slots: ninguno por defecto (se puede configurar desde la UI)
+    PROHIBITED_SLOT_INDICES = []
 
     num_clusters = len(slot_assignment_list)
     population = []
@@ -452,7 +435,8 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
                 for slot_idx, slot_sku in enumerate(srow):
                     if int(slot_sku) != sku_id:
                         continue
-                    if slot_idx in PROHIBITED_SLOT_INDICES:
+                    # evitar slots prohibidos o racks de descarga
+                    if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
                         continue
                     unit_vol = VU_map.get(sku_id, 0.0)
                     cap = int(Vm_local[slot_idx] // unit_vol) if unit_vol > 0 else 0
@@ -622,7 +606,10 @@ def initialize_population(orders, slot_assignment_list, Vm, VU, slot_to_rack_loc
     global D_racks, VU_map, slot_to_rack, PROHIBITED_SLOT_INDICES
     D_racks = D_racks_array
     slot_to_rack = slot_to_rack_local
-    PROHIBITED_SLOT_INDICES = list(range(4))
+    PROHIBITED_SLOT_INDICES = []
+    # Forzar puntos de descarga fijos
+    global DISCHARGE_RACKS
+    DISCHARGE_RACKS = [1, 2, 3]
     # VU puede venir como dict o array
     if hasattr(VU, '__len__'):
         VU_map = {i+1: float(VU[i]) for i in range(len(VU))}
@@ -652,7 +639,7 @@ def initialize_population(orders, slot_assignment_list, Vm, VU, slot_to_rack_loc
                 for slot_idx, slot_sku in enumerate(srow):
                     if int(slot_sku) != sku_id:
                         continue
-                    if slot_idx in PROHIBITED_SLOT_INDICES:
+                    if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
                         continue
                     unit_vol = VU_map.get(sku_id, 0.0)
                     if unit_vol <= 0:
@@ -688,18 +675,21 @@ def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, po
         NUM_SLOTS = slot_assignment.shape[0]
         Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
         slot_to_rack_local = np.argmax(Sr, axis=1).tolist()
-        prohibited = list(range(4))
-        discharge_racks = sorted(set(slot_to_rack_local[s] for s in prohibited))
+        # por defecto no prohibimos slots; evitamos solo los racks de descarga
+        prohibited = []
+        # Forzar puntos de descarga siempre [1,2,3]
+        discharge_racks = [1, 2, 3]
 
         # Inicializar variables globales para las funciones auxiliares
         global D_racks, VU_map, slot_to_rack, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
-        D_racks = D_racks
+        D_racks = D_racks_array
         slot_to_rack = slot_to_rack_local
         PROHIBITED_SLOT_INDICES = prohibited
-        if hasattr(VU, '__len__'):
-            VU_map = {i+1: float(VU[i]) for i in range(len(VU))}
-        elif isinstance(VU, dict):
-            VU_map = {int(k): float(v) for k, v in VU.items()}
+        # VU_array puede venir como array/lista o dict
+        if hasattr(VU_array, '__len__'):
+            VU_map = {i+1: float(VU_array[i]) for i in range(len(VU_array))}
+        elif isinstance(VU_array, dict):
+            VU_map = {int(k): float(v) for k, v in VU_array.items()}
         else:
             VU_map = {}
         DISCHARGE_RACKS = discharge_racks
@@ -767,29 +757,6 @@ def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, po
         })
 
     return results
-    while i < len(genome_with_discharges):
-        rack = genome_with_discharges[i]
-        if rack == 0:
-            if current_rack != start_rack:
-                total_distance += D_racks[current_rack, start_rack]
-                current_rack = start_rack
-                ruta_actual.append(start_rack)
-            rutas_por_pedido.append(ruta_actual[:])
-            ruta_actual = [start_rack]
-            order_idx += 1
-            i += 1
-            continue
-        total_distance += D_racks[current_rack, rack]
-        current_rack = rack
-        ruta_actual.append(rack)
-        i += 1
-    for demand in order_demands:
-        for qty_left in demand.values():
-            if qty_left > 0:
-                penalized = True
-                total_distance += 1e6
-                break
-    return total_distance, 0, penalized, rutas_por_pedido
 
 def order_crossover(parent1, parent2):
     g1, g2 = parent1['genome'], parent2['genome']
