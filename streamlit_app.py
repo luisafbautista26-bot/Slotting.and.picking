@@ -90,7 +90,9 @@ if st.button("Ejecutar optimización"):
         D_racks_df = pd.read_excel(excel, sheet_name="D_racks") if "D_racks" in excel.sheet_names else None
 
         Vm = 3
-        PROHIBITED_SLOTS = {0, 1, 2, 3}
+        # No permitir al usuario elegir puntos prohibidos en slotting; se usan los valores fijos del código.
+        # PROHIBITED_SLOTS para slotting se mantiene vacío (internamente picking puede recibir prohibiciones si se desea).
+        user_prohibited = []
 
         if VU_df is not None:
             VU = {i: float(row[1]) for i, row in enumerate(VU_df.values)}
@@ -125,6 +127,11 @@ if st.button("Ejecutar optimización"):
         NUM_SLOTS = len(rack_assignment)
         rack_assignment = rack_assignment[:NUM_SLOTS]
 
+        # Para picking, los puntos prohibidos son siempre los puntos de descarga
+        # que nos indicaste: 0 es punto de inicio y 0,1,2,3 deben permanecer
+        # prohibidos para asignación de SKUs.
+        PROHIBITED_SLOTS = {0, 1, 2, 3}
+
         if D_racks_df is not None:
             D_racks = D_racks_df.values
         else:
@@ -147,7 +154,7 @@ if st.button("Ejecutar optimización"):
                 pm_swap=pm_swap,
                 seed=seed,
                 NUM_SLOTS=NUM_SLOTS,
-                PROHIBITED_SLOTS=PROHIBITED_SLOTS,
+                PROHIBITED_SLOTS=list(PROHIBITED_SLOTS),
                 NUM_SKUS=NUM_SKUS,
                 D=D,
                 VU=VU,
@@ -212,8 +219,14 @@ if st.button("Ejecutar optimización"):
     try:
         import picking_solver
         st.info(f"Valores en picking_solver: DISCHARGE_RACKS = {picking_solver.DISCHARGE_RACKS}, DEFAULT_VM_PER_SLOT = {picking_solver.DEFAULT_VM_PER_SLOT}, start_rack = 0")
-    except Exception as e:
-        st.warning("No se pudo importar 'picking_solver' para verificar valores en tiempo de ejecución. Si la app está ejecutándose desde antes de los cambios, reinicia Streamlit para cargar las modificaciones.")
+    except Exception:
+        # Fallback a un módulo mínimo que creamos para desbloquear la ejecución mientras se repara picking_solver.py
+        try:
+            import picking_solver_minimal as picking_solver
+            st.warning("Se está usando 'picking_solver_minimal' como respaldo; reinicia Streamlit cuando 'picking_solver' esté reparado para usar la implementación completa.")
+            st.info(f"Valores en picking_solver (fallback): DISCHARGE_RACKS = {picking_solver.DISCHARGE_RACKS}, DEFAULT_VM_PER_SLOT = {picking_solver.DEFAULT_VM_PER_SLOT}, start_rack = 0")
+        except Exception:
+            st.warning("No se pudo importar ningún módulo de picking. Asegúrate de que 'picking_solver.py' o 'picking_solver_minimal.py' existan y no tengan errores de sintaxis.")
 
 # --- Botón para ejecutar Picking (fuera del bloque de slotting) ---
 if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_solutions']) > 0:
@@ -225,7 +238,13 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
     if st.button("Ejecutar optimización de picking para todas las soluciones de slotting"):
         st.info("Ejecutando NSGA-II de picking para todas las soluciones de slotting...")
         try:
-            import picking_solver
+            # Intentar importar la implementación completa; si falla, usar el módulo mínimo como respaldo
+            try:
+                import picking_solver
+            except Exception:
+                import picking_solver_minimal as picking_solver
+                st.warning("Usando 'picking_solver_minimal' como respaldo para ejecutar picking.")
+
             resultados_picking = picking_solver.nsga2_picking_streamlit(
                 slot_assignments=st.session_state['slotting_solutions'],
                 D=st.session_state['D'],
@@ -233,8 +252,10 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 Sr=st.session_state['Sr'],
                 D_racks=st.session_state['D_racks'],
                 pop_size=20,  # puedes ajustar
-                n_gen=10      # puedes ajustar
+                n_gen=10,     # puedes ajustar
+                prohibited_slots=list(PROHIBITED_SLOTS),
             )
+
             st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
 
             # Unificar la gráfica de Pareto de todas las soluciones: todos los puntos en azul, mejor solución con estrella dorada

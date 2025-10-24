@@ -4,6 +4,20 @@ import math
 from collections import defaultdict
 
 # =============================
+# === Defaults / seguridad ===
+# =============================
+# Garantizar que los puntos prohibidos siempre incluyan los puntos de descarga
+# 0,1,2,3 (0 es punto de inicio). Si el usuario carga estas variables desde
+# un excel/otro script, estas asignaciones serán respetadas; si no, usamos
+# valores por defecto seguros.
+if 'PROHIBITED_SLOTS' not in globals():
+    PROHIBITED_SLOTS = {0, 1, 2, 3}
+
+# Capacidad por slot por defecto (si el usuario no lo proporciona)
+if 'Vm' not in globals():
+    Vm = 3
+
+# =============================
 # === Funciones NSGA-II modularizadas ===
 # =============================
 
@@ -91,29 +105,58 @@ def dominates(fitness1, fitness2):
     strictly_better = (fitness1[0] < fitness2[0] or fitness1[1] < fitness2[1])
     return better_or_equal and strictly_better
 
-def crossover_uniform(p1, p2, px, repair, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
+def crossover_uniform(p1, p2, px, repair, NUM_SLOTS=None, PROHIBITED_SLOTS=None, required_slots=None):
     n = len(p1)
     child = np.zeros(n, dtype=int)
     mask = np.random.rand(n) < px
     child[mask] = p1[mask]
     child[~mask] = p2[~mask]
-    return repair(child, NUM_SLOTS, PROHIBITED_SLOTS, required_slots)
+    # Compatibilidad: intentar llamar a repair con la firma completa;
+    # si la función repair original solo acepta (ind), caer en el fallback.
+    try:
+        return repair(child, NUM_SLOTS, PROHIBITED_SLOTS, required_slots)
+    except TypeError:
+        return repair(child)
 
-def mutate_swap(ind, pm, repair, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
+def mutate_swap(ind, pm, repair, NUM_SLOTS=None, PROHIBITED_SLOTS=None, required_slots=None):
     ind = ind.copy()
     if random.random() < pm:
         valid_slots = [s for s in range(NUM_SLOTS) if s not in PROHIBITED_SLOTS]
         if len(valid_slots) >= 2:
             i, j = random.sample(valid_slots, 2)
             ind[i], ind[j] = ind[j], ind[i]
-    return repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots)
+    try:
+        return repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots)
+    except TypeError:
+        return repair(ind)
 
-def repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
+def repair(ind, NUM_SLOTS=None, PROHIBITED_SLOTS=None, required_slots=None):
+    """Repara un individuo para cumplir con los slots requeridos.
+
+    Firma flexible: puede llamarse como repair(ind) (usa globals) o
+    repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots).
+    """
     ind = ind.copy()
+
+    # Resolver parámetros: si no se pasaron, leer desde globals
+    if NUM_SLOTS is None:
+        NUM_SLOTS = globals().get('NUM_SLOTS', None)
+    if PROHIBITED_SLOTS is None:
+        PROHIBITED_SLOTS = globals().get('PROHIBITED_SLOTS', [])
+    if required_slots is None:
+        required_slots = globals().get('required_slots', None)
+
+    # Si required_slots no está disponible, nada que reparar
+    if required_slots is None:
+        return ind
+
+    # Contar slots actuales por SKU
     current_counts = defaultdict(int)
     for sku in ind:
         if sku > 0:
             current_counts[sku] += 1
+
+    # Quitar excedentes (determinístico: los primeros encontrados)
     for sku in list(current_counts.keys()):
         required = required_slots.get(sku, 0)
         if current_counts[sku] > required:
@@ -122,6 +165,8 @@ def repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
             for i in range(excess):
                 if i < len(sku_slots):
                     ind[sku_slots[i]] = 0
+
+    # Agregar faltantes
     for sku, required in required_slots.items():
         current = sum(1 for val in ind if val == sku)
         if current < required:
@@ -129,6 +174,7 @@ def repair(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
             needed = required - current
             for i in range(min(needed, len(empty_slots))):
                 ind[empty_slots[i]] = sku
+
     return ind
 
 def non_dominated_sort(population, fitness_func):
@@ -189,21 +235,25 @@ def nsga2(
 ):
     random.seed(seed)
     np.random.seed(seed)
+    # Calcular slots requeridos por SKU usando la función modular
     required_slots = calcular_required_slots(D, VU, Vm)
-    all_assignments = []
+
+    # Demanda total de cada SKU (suma vertical de columnas)
     demand_total = D.sum(axis=0)
-    for sku_idx in range(NUM_SKUS):
-        # usar sku_id 1-based
-        sku_id = sku_idx + 1
-        if isinstance(VU, dict):
-            vu_val = float(VU.get(sku_id, 0.0))
-        else:
-            vu_val = float(VU[sku_idx])
-        count = math.ceil(demand_total[sku_idx] * vu_val / Vm)
-        all_assignments.extend([sku_id] * count)
+
+    # Mostrar información útil
+    print("Demanda total:", demand_total)
+    print("Slots requeridos por SKU:", required_slots)
+
+    # Lista completa de asignaciones necesarias
+    all_assignments = []
+    for sku, count in required_slots.items():
+        all_assignments.extend([sku] * count)
+
+    # Si hay menos asignaciones que slots disponibles → rellenar con vacíos
     usable_slots = NUM_SLOTS - len(PROHIBITED_SLOTS)
     if len(all_assignments) < usable_slots:
-        all_assignments.extend([0] * (usable_slots - len(all_assignments)))
+        all_assignments.extend([0] * (usable_slots - len(all_assignments)))  # 0 = vacío
     def fitness_func(ind):
         return fitness(ind, required_slots, NUM_SKUS, D, VU, Vm, rack_assignment, D_racks, PROHIBITED_SLOTS)
     def repair_func(ind, NUM_SLOTS, PROHIBITED_SLOTS, required_slots):
@@ -245,3 +295,45 @@ def nsga2(
         return pareto_front, pareto_fitness
     else:
         return pop, final_fitness
+
+
+def nsga2_compat(pop_size, generations, cx_rate, pm_swap, seed, verbose=True):
+    """Compatibility wrapper matching the simple signature used in older code.
+
+    It collects required data from globals (D, VU, Vm, NUM_SLOTS, PROHIBITED_SLOTS,
+    NUM_SKUS, rack_assignment, D_racks) and calls the explicit `nsga2`.
+    """
+    # Try to read necessary globals
+    G = globals()
+    missing = []
+    for name in ('D', 'VU', 'Vm', 'NUM_SLOTS', 'PROHIBITED_SLOTS', 'NUM_SKUS', 'rack_assignment', 'D_racks'):
+        if name not in G:
+            missing.append(name)
+    if missing:
+        raise RuntimeError(f"nsga2_compat: faltan variables globales necesarias: {missing}")
+
+    D = G['D']
+    VU = G['VU']
+    Vm = G['Vm']
+    NUM_SLOTS = G['NUM_SLOTS']
+    PROHIBITED_SLOTS = G['PROHIBITED_SLOTS']
+    NUM_SKUS = G['NUM_SKUS']
+    rack_assignment = G['rack_assignment']
+    D_racks = G['D_racks']
+
+    # Call the explicit nsga2 implementation
+    return nsga2(
+        pop_size=pop_size,
+        generations=generations,
+        cx_rate=cx_rate,
+        pm_swap=pm_swap,
+        seed=seed,
+        NUM_SLOTS=NUM_SLOTS,
+        PROHIBITED_SLOTS=PROHIBITED_SLOTS,
+        NUM_SKUS=NUM_SKUS,
+        D=D,
+        VU=VU,
+        Vm=Vm,
+        rack_assignment=rack_assignment,
+        D_racks=D_racks,
+    )

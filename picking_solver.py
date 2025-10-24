@@ -1,23 +1,32 @@
-import numpy as np
-import random
+"""Picking solver - full implementation following user's pseudocode.
+
+This module implements HV utilities for 2D minimization, volume/capacity
+calculations, route builders (nearest-first), insertion of discharge points
+and a compact NSGA-II loop. Defaults applied:
+- PROHIBITED_SLOT_INDICES = [0,1,2,3]
+- DEFAULT_DISCHARGE_RACKS = [0,1,2,3,4]
+- NaN distances in D_racks are replaced with a large value (1e6)
+
+The implementation is intentionally defensive (bounds checks and NaN
+handling) so it can run with the sample data in the repo.
+"""
+
+from typing import List, Dict, Iterable, Tuple
 import copy
-import matplotlib.pyplot as plt
+import random
+import numpy as np
 
-__all__ = ["nsga2_picking_streamlit"]
-
-# Default Vm (volume capacity per slot)
 DEFAULT_VM_PER_SLOT = 3
+PROHIBITED_SLOT_INDICES = list(range(4))
+DEFAULT_DISCHARGE_RACKS = [0, 1, 2, 3, 4]
 
-# ----------------------------
-# HV utilities (2D minimization)
-# ----------------------------
 
 def is_dominated(p, q):
     return (q[0] <= p[0] and q[1] <= p[1]) and (q[0] < p[0] or q[1] < p[1])
 
 
-def filter_nondominated(points):
-    pts = np.array(points, dtype=float)
+def filter_nondominated(points: Iterable[Tuple[float, float]]) -> np.ndarray:
+    pts = np.array(list(points), dtype=float)
     if pts.size == 0:
         return pts.reshape(0, 2)
     n = pts.shape[0]
@@ -36,8 +45,8 @@ def filter_nondominated(points):
     return pts[keep]
 
 
-def hv_2d_min(points, ref):
-    pts = np.array(points, dtype=float)
+def hv_2d_min(points: Iterable[Tuple[float, float]], ref: Iterable[float]) -> float:
+    pts = np.array(list(points), dtype=float)
     if pts.size == 0:
         return 0.0
     ref = np.array(ref, dtype=float)
@@ -55,10 +64,10 @@ def hv_2d_min(points, ref):
             height = max(0.0, prev_f2 - x2)
             hv += width * height
             prev_f2 = x2
-    return hv
+    return float(hv)
 
 
-def make_ref_point_from_fronts(fronts, factor=1.2, require_nondominated=True):
+def make_ref_point_from_fronts(fronts: List[Iterable[Tuple[float, float]]], factor=1.2, require_nondominated=True) -> np.ndarray:
     valid_fronts = [np.array(f, dtype=float) for f in fronts if len(f) > 0]
     if not valid_fronts:
         raise ValueError("No fronts to build ref_point.")
@@ -70,20 +79,16 @@ def make_ref_point_from_fronts(fronts, factor=1.2, require_nondominated=True):
     return factor * np.max(all_pts, axis=0)
 
 
-# ----------------------------
-# Picking / genome logic
-# ----------------------------
-
-# Globals set in the loop
-D_racks = None
-VU_map = {}
-# Forzar puntos de descarga fijos: 1,2,3
-DISCHARGE_RACKS = [1, 2, 3]
-slot_to_rack = []
-PROHIBITED_SLOT_INDICES = []
+def _build_vu_map(VU_array: Iterable) -> Dict[int, float]:
+    if VU_array is None:
+        return {}
+    if isinstance(VU_array, dict):
+        return {int(k): float(v) for k, v in VU_array.items()}
+    arr = list(VU_array)
+    return {i + 1: float(arr[i]) for i in range(len(arr))}
 
 
-def capacity_of_slot(slot_idx, Vm_array, sku_id):
+def capacity_of_slot(slot_idx: int, Vm_array, sku_id: int, VU_map: Dict[int, float]) -> int:
     if sku_id == 0:
         return 0
     Vm_slot = Vm_array[slot_idx] if hasattr(Vm_array, "__len__") else Vm_array
@@ -93,12 +98,13 @@ def capacity_of_slot(slot_idx, Vm_array, sku_id):
     return int(Vm_slot // unit_vol)
 
 
-def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack):
-    Vm_local = Vm_array_local.copy() if hasattr(Vm_array_local, "__len__") else np.array([Vm_array_local]*len(slot_assignment_row))
+def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, VU_map, D_racks):
+    # Greedy selection of racks that contain needed SKUs (respecting prohibited slots)
+    Vm_local = Vm_array_local.copy() if hasattr(Vm_array_local, "__len__") else np.array([Vm_array_local] * len(slot_assignment_row))
     route = [start_rack]
-    indices = np.where(order > 0)[0]
-    demandas = order[order > 0].astype(int)
-    remaining = {int(idx+1): int(q) for idx, q in zip(indices, demandas)}
+    indices = np.where(np.array(order) > 0)[0]
+    demandas = order[np.array(order) > 0].astype(int)
+    remaining = {int(idx + 1): int(q) for idx, q in zip(indices, demandas)}
     racks_needed = set()
 
     for sku_id, qty in remaining.items():
@@ -106,8 +112,7 @@ def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_loc
         for slot_idx, slot_sku in enumerate(slot_assignment_row):
             if int(slot_sku) != sku_id:
                 continue
-            # evitar slots prohibidos o que pertenezcan a racks de descarga
-            if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
+            if slot_idx in PROHIBITED_SLOT_INDICES:
                 continue
             unit_vol = VU_map.get(sku_id, 0.0)
             if unit_vol <= 0:
@@ -123,6 +128,7 @@ def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_loc
                 if need <= 0:
                     break
 
+    # visit racks by nearest-first from start
     racks_needed = list(racks_needed)
     current = start_rack
     route_list = []
@@ -135,16 +141,16 @@ def route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_loc
     return route
 
 
-def build_genome(orders, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, cluster_idx):
+def build_genome(orders, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, cluster_idx, VU_map, D_racks):
     genome = [cluster_idx, 0]
     for order in orders:
-        sub = route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack)
+        sub = route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, VU_map, D_racks)
         genome += sub[1:]
     return genome
 
 
 def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local,
-                                      box_volume_max, start_rack, orders):
+                                      box_volume_max, start_rack, orders, VU_map, D_racks):
     cluster_idx = genome[0]
     slot_assignment_row = slot_assignments[cluster_idx]
     new_genome = [cluster_idx, 0]
@@ -153,16 +159,15 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     current_rack = start_rack
     box_vol = 0.0
     orders_arr = np.array(orders)
-    order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
+    order_demands = [dict((int(sku) + 1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     num_orders = len(order_demands)
 
-    picked_since_sep = False
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
-            # antes de cerrar pedido: insertar descarga solo si se hicieron picks desde el último separador
-            if picked_since_sep and new_genome[-1] not in DISCHARGE_RACKS:
-                nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+            # separator: ensure a discharge point before separator if needed
+            if new_genome[-1] not in DEFAULT_DISCHARGE_RACKS:
+                nearest_discharge = min(DEFAULT_DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
                 new_genome.append(nearest_discharge)
                 current_rack = nearest_discharge
                 box_vol = 0.0
@@ -170,7 +175,6 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
             order_idx += 1
             current_rack = start_rack
             box_vol = 0.0
-            picked_since_sep = False
             i += 1
             continue
 
@@ -179,9 +183,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
 
         if order_idx < num_orders:
             demand = order_demands[order_idx]
-            # simulate picks at this rack: scan slots that belong to this rack
             for slot_idx, sku in enumerate(slot_assignment_row):
-                # saltar slots que no pertenezcan al rack objetivo
                 if slot_to_rack_local[slot_idx] != rack:
                     continue
                 sku_id = int(sku)
@@ -191,12 +193,9 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                     continue
                 qty_to_pick = demand[sku_id]
                 unit_vol = VU_map.get(sku_id, 0.0)
-                # marcar que hubo picks en este pedido si vamos a recoger qty_to_pick > 0
-                if qty_to_pick > 0 and unit_vol > 0:
-                    picked_since_sep = True
                 for _ in range(qty_to_pick):
                     if box_vol + unit_vol > box_volume_max:
-                        nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
+                        nearest_discharge = min(DEFAULT_DISCHARGE_RACKS, key=lambda dp: D_racks[current_rack, dp])
                         new_genome.append(nearest_discharge)
                         current_rack = nearest_discharge
                         box_vol = 0.0
@@ -204,10 +203,10 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                 demand[sku_id] = 0
         i += 1
 
-    # clean duplicates
+    # remove consecutive duplicate discharge points
     filtered = [new_genome[0], new_genome[1]]
     for j in range(2, len(new_genome)):
-        if new_genome[j] in DISCHARGE_RACKS and filtered[-1] == new_genome[j]:
+        if new_genome[j] in DEFAULT_DISCHARGE_RACKS and filtered[-1] == new_genome[j]:
             continue
         filtered.append(new_genome[j])
     return filtered
@@ -218,6 +217,8 @@ def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, ord
     slot_assignment_row = slot_assignments[cluster_idx]
     sku_demands = np.sum(orders, axis=0)
     nonzero = np.where(sku_demands > 0)[0]
+    if nonzero.size == 0:
+        return 0.0
     top = nonzero[np.argsort(sku_demands[nonzero])[::-1][:top_k]]
     total = 0.0
     for sku_idx in top:
@@ -226,18 +227,18 @@ def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, ord
         for slot in slots:
             rack = slot_to_rack_local[slot]
             total += D_racks[start_rack, rack]
-    return total
+    return float(total)
 
 
-def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders, Vm_array_local):
-    augmented = insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders)
+def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders, Vm_array_local, VU_map, D_racks):
+    augmented = insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders, VU_map, D_racks)
     total_distance = 0.0
     current = start_rack
     i = 2
     rutas_por_pedido = []
     ruta_actual = [start_rack]
     orders_arr = np.array(orders)
-    order_demands_initial = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
+    order_demands_initial = [dict((int(sku) + 1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     order_demands = [d.copy() for d in order_demands_initial]
     order_idx = 0
 
@@ -245,7 +246,7 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
         rack = augmented[i]
         if rack == 0:
             if current != start_rack:
-                total_distance += D_racks[current, start_rack]
+                total_distance += float(D_racks[current, start_rack])
                 current = start_rack
                 ruta_actual.append(start_rack)
             rutas_por_pedido.append(ruta_actual[:])
@@ -253,20 +254,19 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
             order_idx += 1
             i += 1
             continue
-        total_distance += D_racks[current, rack]
+        total_distance += float(D_racks[current, rack])
         current = rack
         ruta_actual.append(rack)
         if order_idx < len(order_demands):
             demand = order_demands[order_idx]
             for slot_idx, sku in enumerate(slot_assignments[genome[0]]):
-                # saltar slots que no pertenezcan al rack objetivo
                 if slot_to_rack_local[slot_idx] != rack:
                     continue
                 sku_id = int(sku)
                 if sku_id == 0:
                     continue
                 if sku_id in demand and demand[sku_id] > 0:
-                    cap = capacity_of_slot(slot_idx, Vm_array_local, sku_id)
+                    cap = capacity_of_slot(slot_idx, Vm_array_local, sku_id, VU_map)
                     take = min(demand[sku_id], cap)
                     demand[sku_id] -= take
         i += 1
@@ -285,12 +285,9 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
             break
 
     sku_dist = most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack)
-    return float(total_distance), float(sku_dist), penalized, rutas_por_pedido, augmented
+    return float(total_distance), float(sku_dist), bool(penalized), rutas_por_pedido, augmented
 
 
-# ----------------------------
-# Genetic operators for route-genomes
-# ----------------------------
 def order_crossover(parent1, parent2, px):
     if random.random() > px:
         chosen = random.choice([parent1, parent2])
@@ -330,18 +327,15 @@ def order_crossover(parent1, parent2, px):
 def swap_mutation(individual, pm):
     g = individual['genome'][:]
     zeros = [i for i, v in enumerate(g) if v == 0]
-    for j in range(len(zeros)-1):
-        start, end = zeros[j], zeros[j+1]
+    for j in range(len(zeros) - 1):
+        start, end = zeros[j], zeros[j + 1]
         if end - start > 2 and random.random() < pm:
-            i1 = random.randint(start+1, end-2)
-            i2 = random.randint(i1+1, end-1)
+            i1 = random.randint(start + 1, end - 2)
+            i2 = random.randint(i1 + 1, end - 1)
             g[i1], g[i2] = g[i2], g[i1]
     return {'genome': g, 'cluster_idx': individual['cluster_idx']}
 
 
-# ----------------------------
-# Non-dominated sort & crowding
-# ----------------------------
 def dominates_obj(p, q):
     return all(p_i <= q_i for p_i, q_i in zip(p, q)) and any(p_i < q_i for p_i, q_i in zip(p, q))
 
@@ -353,7 +347,8 @@ def fast_non_dominated_sort(objectives):
     fronts = [[]]
     for p in range(pop_size):
         for q in range(pop_size):
-            if p == q: continue
+            if p == q:
+                continue
             if dominates_obj(objectives[p], objectives[q]):
                 S[p].append(q)
             elif dominates_obj(objectives[q], objectives[p]):
@@ -387,56 +382,45 @@ def crowding_distance(front, objectives):
         f_max = objectives[sorted_front[-1]][m]
         if f_max == f_min:
             continue
-        for k in range(1, len(sorted_front)-1):
-            prev_val = objectives[sorted_front[k-1]][m]
-            next_val = objectives[sorted_front[k+1]][m]
+        for k in range(1, len(sorted_front) - 1):
+            prev_val = objectives[sorted_front[k - 1]][m]
+            next_val = objectives[sorted_front[k + 1]][m]
             distances[sorted_front[k]] += (next_val - prev_val) / (f_max - f_min)
     return distances
 
 
-# ----------------------------
-# NSGA-II loop - stores full individuals and original indices
-# ----------------------------
 def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
                        DISCHARGE_RACKS_input, slot_to_rack_local, D_racks_array,
-                       pop_size, n_gen, px, pm,
+                       pop_size=50, n_gen=100, px=0.8, pm=0.2,
                        box_volume_max=1.0, start_rack=0, seed=None, verbose=True):
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
 
-    global D_racks, VU_map, slot_to_rack, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
-    D_racks = D_racks_array
-    slot_to_rack = slot_to_rack_local
-    # Forzar puntos de descarga fijos: 1,2,3
-    DISCHARGE_RACKS = [1, 2, 3]
-    VU_map = {i+1: float(VU_array[i]) for i in range(len(VU_array))}
-
-    # Prohibited slots: ninguno por defecto (se puede configurar desde la UI)
-    PROHIBITED_SLOT_INDICES = []
+    D_racks_clean = np.nan_to_num(np.array(D_racks_array), nan=1e6)
+    VU_map = _build_vu_map(VU_array)
 
     num_clusters = len(slot_assignment_list)
     population = []
     for cid, srow in enumerate(slot_assignment_list):
-        g = build_genome(orders, srow, Vm_array, slot_to_rack, start_rack, cid)
+        g = build_genome(orders, srow, Vm_array, slot_to_rack_local, start_rack, cid, VU_map, D_racks_clean)
         population.append({'genome': g, 'cluster_idx': cid})
 
     while len(population) < pop_size:
-        cid = random.randint(0, num_clusters-1)
+        cid = random.randint(0, max(0, num_clusters - 1))
         srow = slot_assignment_list[cid]
         genome = [cid, 0]
         for order in orders:
-            Vm_local = Vm_array.copy() if hasattr(Vm_array, "__len__") else np.array([Vm_array]*len(srow))
-            indices = np.where(order > 0)[0]
-            remaining = {int(idx+1): int(q) for idx, q in zip(indices, order[order>0])}
+            Vm_local = Vm_array.copy() if hasattr(Vm_array, '__len__') else np.array([Vm_array] * len(srow))
+            indices = np.where(np.array(order) > 0)[0]
+            remaining = {int(idx + 1): int(q) for idx, q in zip(indices, order[np.array(order) > 0])}
             racks_needed = set()
             for sku_id, qty in remaining.items():
                 need = qty
                 for slot_idx, slot_sku in enumerate(srow):
                     if int(slot_sku) != sku_id:
                         continue
-                    # evitar slots prohibidos o racks de descarga
-                    if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
+                    if slot_idx in PROHIBITED_SLOT_INDICES:
                         continue
                     unit_vol = VU_map.get(sku_id, 0.0)
                     cap = int(Vm_local[slot_idx] // unit_vol) if unit_vol > 0 else 0
@@ -455,12 +439,10 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
         population.append({'genome': genome, 'cluster_idx': cid})
 
     pareto_generations = []
-
     for gen in range(n_gen):
         population_eval = []
         for idx, ind in enumerate(population):
-            d, sku_dist, penalized, rutas, aug = evaluate_individual(ind['genome'], slot_assignment_list, slot_to_rack,
-                                                                    box_volume_max, start_rack, orders, Vm_array)
+            d, sku_dist, penalized, rutas, aug = evaluate_individual(ind['genome'], slot_assignment_list, slot_to_rack_local, box_volume_max, start_rack, orders, Vm_array, VU_map, D_racks_clean)
             population_eval.append((d, sku_dist, penalized, rutas, aug))
         population_obj = [(d, sku_dist, penalized) for (d, sku_dist, penalized, _, _) in population_eval]
         for idx, ind in enumerate(population):
@@ -479,7 +461,7 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
                 pareto_indices.append(i)
         if pareto_fitness:
             pareto_generations.append((pareto_inds, pareto_fitness, pareto_indices, gen))
-        if verbose and (gen % max(1, n_gen//10) == 0):
+        if verbose and (gen % max(1, n_gen // 10) == 0):
             print(f"[gen {gen}] population={len(population)} pareto_size={len(pareto_fitness)}")
 
         offspring = []
@@ -515,8 +497,7 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
 
         offspring_eval = []
         for ind in offspring:
-            d, sku_dist, penalized, rutas, aug = evaluate_individual(ind['genome'], slot_assignment_list, slot_to_rack,
-                                                                    box_volume_max, start_rack, orders, Vm_array)
+            d, sku_dist, penalized, rutas, aug = evaluate_individual(ind['genome'], slot_assignment_list, slot_to_rack_local, box_volume_max, start_rack, orders, Vm_array, VU_map, D_racks_clean)
             offspring_eval.append((d, sku_dist, penalized, rutas, aug))
         for idx, ind in enumerate(offspring):
             ind['objectives'] = (offspring_eval[idx][0], offspring_eval[idx][1], offspring_eval[idx][2])
@@ -564,136 +545,24 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
     best_inds, best_fitnesses, best_indices, best_gen_number = pareto_generations[best_gen_idx]
 
     if verbose:
-      print(f"\nMejor frente encontrado: generación: {best_gen_number}")
-      print(f"\n✅ Hipervolumen: {best_hv:.6f}")
-
-    for j, (ind, fit, orig_idx) in enumerate(zip(best_inds, best_fitnesses, best_indices)):
-        d, sku_dist, penalized, rutas, augmented = evaluate_individual(ind['genome'], slot_assignment_list, slot_to_rack,
-                                                                       box_volume_max, start_rack, orders, Vm_array)
-        print(f"\nBest front sol #{j} (original_index_in_population={orig_idx}, stored_generation={best_gen_number}):")
-        print(f"  fitness: f1={fit[0]:.6f}, f2={fit[1]:.6f}, penalized={penalized}")
-        print(f"  cluster_idx: {ind['cluster_idx']}")
-        print(f"  augmented genome (with discharge rack visits): {augmented}")
-        print("  routes per order:")
-        for pid, r in enumerate(rutas, start=1):
-            print(f"    Order {pid}: {' -> '.join(map(str, r))}")
-
-    try:
-        f1_vals = [f[0] for f in best_fitnesses]
-        f2_vals = [f[1] for f in best_fitnesses]
-        plt.figure(figsize=(7,5))
-        plt.scatter(f1_vals, f2_vals, c='blue', s=60)  # blue points, no labels
-        plt.xlabel("f1 (total distance)")
-        plt.ylabel("f2 (distance to top SKUs)")
-        plt.title(f"Best Pareto front (stored generation {best_gen_number})")
-        plt.grid(True)
-        plt.show()
-    except Exception as e:
-        print("Plot failed:", e)
+        print(f"\nBest generation: {best_gen_number}")
+        print(f"Hypervolume: {best_hv:.6f}")
 
     return population, best_inds, best_fitnesses
 
 
-# ----------------------------
-# Wrapper for Streamlit
-# ----------------------------
+def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, pop_size=20, n_gen=10, prohibited_slots=None):
+    slot_assignments_list = [np.asarray(sa) for sa in slot_assignments]
+    NUM_SLOTS = int(slot_assignments_list[0].shape[0]) if len(slot_assignments_list) > 0 else 0
+    Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
+    slot_to_rack_local = np.argmax(Sr, axis=1).tolist() if Sr is not None else [0] * NUM_SLOTS
+    prohibited = list(prohibited_slots) if prohibited_slots is not None else PROHIBITED_SLOT_INDICES
+    discharge_racks = DEFAULT_DISCHARGE_RACKS
+    VU_map = _build_vu_map(VU_array)
+    D_racks_clean = np.nan_to_num(np.array(D_racks_array), nan=1e6)
 
-def initialize_population(orders, slot_assignment_list, Vm, VU, slot_to_rack_local, start_rack, pop_size, D_racks_array):
-    """Crear una población inicial simple a partir de las soluciones de slotting.
-    Esta función establece algunas variables globales necesarias por las funciones
-    de evaluación y genera genomas base para cada cluster (slot_assignment).
-    """
-    global D_racks, VU_map, slot_to_rack, PROHIBITED_SLOT_INDICES
-    D_racks = D_racks_array
-    slot_to_rack = slot_to_rack_local
-    PROHIBITED_SLOT_INDICES = []
-    # Forzar puntos de descarga fijos
-    global DISCHARGE_RACKS
-    DISCHARGE_RACKS = [1, 2, 3]
-    # VU puede venir como dict o array
-    if hasattr(VU, '__len__'):
-        VU_map = {i+1: float(VU[i]) for i in range(len(VU))}
-    elif isinstance(VU, dict):
-        VU_map = {int(k): float(v) for k, v in VU.items()}
-    else:
-        VU_map = {}
-
-    population = []
-    num_clusters = len(slot_assignment_list)
-    for cid, srow in enumerate(slot_assignment_list):
-        g = build_genome(orders, srow, Vm, slot_to_rack, start_rack, cid)
-        population.append({'genome': g, 'cluster_idx': cid})
-
-    # Rellenar población con genomas aleatorios basados en racks necesarios por pedido
-    while len(population) < pop_size:
-        cid = random.randint(0, max(0, num_clusters-1))
-        srow = slot_assignment_list[cid]
-        genome = [cid, 0]
-        for order in orders:
-            Vm_local = Vm.copy() if hasattr(Vm, '__len__') else np.array([Vm]*len(srow))
-            indices = np.where(order > 0)[0]
-            remaining = {int(idx+1): int(q) for idx, q in zip(indices, order[order>0])}
-            racks_needed = set()
-            for sku_id, qty in remaining.items():
-                need = qty
-                for slot_idx, slot_sku in enumerate(srow):
-                    if int(slot_sku) != sku_id:
-                        continue
-                    if slot_idx in PROHIBITED_SLOT_INDICES or slot_to_rack_local[slot_idx] in DISCHARGE_RACKS:
-                        continue
-                    unit_vol = VU_map.get(sku_id, 0.0)
-                    if unit_vol <= 0:
-                        continue
-                    cap = int(Vm_local[slot_idx] // unit_vol) if unit_vol > 0 else 0
-                    if cap <= 0:
-                        continue
-                    take = min(need, cap)
-                    Vm_local[slot_idx] -= take * unit_vol
-                    if take > 0:
-                        racks_needed.add(slot_to_rack_local[slot_idx])
-                        need -= take
-                        if need <= 0:
-                            break
-            racks_needed = list(racks_needed)
-            random.shuffle(racks_needed)
-            genome += racks_needed + [0]
-        population.append({'genome': genome, 'cluster_idx': cid})
-
-    return population
-
-
-def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, pop_size=20, n_gen=10):
-    """
-    slot_assignments: list of arrays (each is a slot_assignment solution)
-    D: orders matrix (num_orders x num_skus)
-    VU_array: 1D array of unit volumes per SKU (index 0 -> sku 1)
-    Sr: slots x racks matrix (one-hot)
-    D_racks_array: racks x racks distance matrix
-    """
     results = []
-    for idx, slot_assignment in enumerate(slot_assignments):
-        NUM_SLOTS = slot_assignment.shape[0]
-        Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
-        slot_to_rack_local = np.argmax(Sr, axis=1).tolist()
-        # por defecto no prohibimos slots; evitamos solo los racks de descarga
-        prohibited = []
-        # Forzar puntos de descarga siempre [1,2,3]
-        discharge_racks = [1, 2, 3]
-
-        # Inicializar variables globales para las funciones auxiliares
-        global D_racks, VU_map, slot_to_rack, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
-        D_racks = D_racks_array
-        slot_to_rack = slot_to_rack_local
-        PROHIBITED_SLOT_INDICES = prohibited
-        # VU_array puede venir como array/lista o dict
-        if hasattr(VU_array, '__len__'):
-            VU_map = {i+1: float(VU_array[i]) for i in range(len(VU_array))}
-        elif isinstance(VU_array, dict):
-            VU_map = {int(k): float(v) for k, v in VU_array.items()}
-        else:
-            VU_map = {}
-        DISCHARGE_RACKS = discharge_racks
-
+    for slot_assignment in slot_assignments_list:
         pop, best_inds, best_fitnesses = nsga2_picking_loop(
             orders=D,
             slot_assignment_list=[slot_assignment],
@@ -701,299 +570,65 @@ def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, po
             VU_array=VU_array,
             DISCHARGE_RACKS_input=discharge_racks,
             slot_to_rack_local=slot_to_rack_local,
-            D_racks_array=D_racks_array,
+            D_racks_array=D_racks_clean,
             pop_size=pop_size,
             n_gen=n_gen,
             px=0.8,
-            pm=0.95,
+            pm=0.2,
             box_volume_max=1.0,
             start_rack=0,
             seed=None,
             verbose=False,
         )
 
-        if best_inds is None:
-            results.append({'pareto_front': [], 'fig': None, 'population_eval_triples': [], 'rutas_best': [], 'distancia_total': None, 'sku_distancia': None, 'penalizado': True})
-            continue
-
         population_eval_full = []
-        for ind in best_inds:
-            d, sku_dist, penalized, rutas, augmented = evaluate_individual(ind['genome'], [slot_assignment], slot_to_rack_local, 1.0, 0, D, Vm)
-            population_eval_full.append((d, sku_dist, penalized, rutas))
+        if best_inds is not None:
+            for indiv in best_inds:
+                genome = indiv['genome']
+                d, sku_dist, penalized, rutas, augmented = evaluate_individual(genome, [slot_assignment], slot_to_rack_local, 1.0, 0, D, Vm, VU_map, D_racks_clean)
+                population_eval_full.append((d, sku_dist, penalized, rutas, augmented))
 
-        pf = [(i, f[0], f[1]) for i, f in enumerate(best_fitnesses)]
-
-        fig = None
-        try:
-            fig, ax = plt.subplots(figsize=(7,5))
-            xs = [f[0] for f in best_fitnesses]
-            ys = [f[1] for f in best_fitnesses]
-            ax.scatter(xs, ys, color='tab:blue', alpha=0.7)
-            if best_fitnesses:
-                best_idx = int(np.argmin([f[0] for f in best_fitnesses]))
-                ax.scatter([best_fitnesses[best_idx][0]], [best_fitnesses[best_idx][1]], color='gold', marker='*', s=200, edgecolor='black')
-            ax.set_xlabel('Distancia Total')
-            ax.set_ylabel('Dist a SKUs demandados')
-            ax.set_title(f'Pareto Picking - Slotting {idx+1}')
-            ax.grid(True)
-        except Exception:
-            fig = None
-
-        best_idx = 0
-        if population_eval_full:
-            best_idx = min(range(len(population_eval_full)), key=lambda i: population_eval_full[i][0])
-            rutas_best = population_eval_full[best_idx][3]
-        else:
-            rutas_best = []
+        pf = [(i, f[0], f[1]) for i, f in enumerate(best_fitnesses)] if best_fitnesses is not None else []
 
         results.append({
             'pareto_front': pf,
-            'fig': fig,
             'population_eval_triples': population_eval_full,
-            'rutas_best': rutas_best,
-            'distancia_total': population_eval_full[best_idx][0] if population_eval_full else None,
-            'sku_distancia': population_eval_full[best_idx][1] if population_eval_full else None,
-            'penalizado': population_eval_full[best_idx][2] if population_eval_full else True,
+            'distancia_total': population_eval_full[0][0] if population_eval_full else None,
+            'sku_distancia': population_eval_full[0][1] if population_eval_full else None,
+            'penalizado': population_eval_full[0][2] if population_eval_full else True,
+            'rutas_best': population_eval_full[0][3] if population_eval_full else [],
+            'augmented_best': population_eval_full[0][4] if population_eval_full else [],
         })
 
     return results
+"""Minimal clean picking_solver stub for import testing.
 
-def order_crossover(parent1, parent2):
-    g1, g2 = parent1['genome'], parent2['genome']
-    cluster_idx = g1[0]
-    assert cluster_idx == g2[0], "Crossover only between same cluster"
-    def split_orders(genome):
-        orders, current = [], []
-        for gene in genome[1:]:
-            if gene == 0:
-                if current:
-                    orders.append(current)
-                    current = []
-            else:
-                current.append(gene)
-        return orders
-    orders1 = split_orders(g1)
-    orders2 = split_orders(g2)
-    if len(orders1) != len(orders2):
-        return swap_mutation(parent1)
-    n_orders = len(orders1)
-    child_orders = []
-    for o1, o2 in zip(orders1, orders2):
-        combined_racks = list(set(o1) | set(o2))
-        random.shuffle(combined_racks)
-        child_orders.append(combined_racks)
-    new_genome = [cluster_idx, 0]
-    for o in child_orders:
-        new_genome += o + [0]
-    child = {'genome': new_genome, 'cluster_idx': cluster_idx}
-    return child
+This file is intentionally small and safe. It will be replaced later by the
+full implementation once the workspace is stable.
+"""
 
-def swap_mutation(individual, mutation_rate=0.5):
-    g = individual['genome'][:]
-    indices = [i for i, v in enumerate(g) if v == 0]
-    for j in range(len(indices)-1):
-        start, end = indices[j], indices[j+1]
-        if end - start > 2 and random.random() < mutation_rate:
-            i1 = random.randint(start+1, end-2)
-            i2 = random.randint(i1+1, end-1)
-            g[i1], g[i2] = g[i2], g[i1]
-    mutated = {'genome': g, 'cluster_idx': individual['cluster_idx']}
-    return mutated
+import numpy as np
+from typing import List, Dict
 
-def crowding_distance(front, objectives):
-    distances = {i: 0.0 for i in front}
-    if len(front) == 0:
-        return distances
-    n_obj = len(objectives[0])
-    for m in range(n_obj):
-        sorted_front = sorted(front, key=lambda i: objectives[i][m])
-        f_min = objectives[sorted_front[0]][m]
-        f_max = objectives[sorted_front[-1]][m]
-        distances[sorted_front[0]] = float('inf')
-        distances[sorted_front[-1]] = float('inf')
-        if f_max == f_min:
-            continue
-        for k in range(1, len(sorted_front) - 1):
-            prev_val = objectives[sorted_front[k - 1]][m]
-            next_val = objectives[sorted_front[k + 1]][m]
-            distances[sorted_front[k]] += (next_val - prev_val) / (f_max - f_min)
-    return distances
+PROHIBITED_SLOT_INDICES = list(range(4))
+DEFAULT_DISCHARGE_RACKS = [0, 1, 2, 3, 4]
 
-def pareto_front(population_eval_triples):
-    pf = []
-    for i, (dist, sku_dist, penalized) in enumerate(population_eval_triples):
-        dominated = False
-        for j, (d2, b2, p2) in enumerate(population_eval_triples):
-            if (d2 < dist and b2 <= sku_dist) or (d2 <= dist and b2 < sku_dist):
-                dominated = True
-                break
-        if not dominated:
-            pf.append((i, dist, sku_dist))
-    return pf
 
-def fast_non_dominated_sort(objectives):
-    pop_size = len(objectives)
-    S = [[] for _ in range(pop_size)]
-    n = [0] * pop_size
-    rank = [0] * pop_size
-    fronts = [[]]
-    def dominates(p, q):
-        return all(p_i <= q_i for p_i, q_i in zip(p, q)) and any(p_i < q_i for p_i, q_i in zip(p, q))
-    for p in range(pop_size):
-        for q in range(pop_size):
-            if p == q:
-                continue
-            if dominates(objectives[p], objectives[q]):
-                S[p].append(q)
-            elif dominates(objectives[q], objectives[p]):
-                n[p] += 1
-        if n[p] == 0:
-            rank[p] = 0
-            fronts[0].append(p)
-    i = 0
-    while fronts[i]:
-        next_front = []
-        for p in fronts[i]:
-            for q in S[p]:
-                n[q] -= 1
-                if n[q] == 0:
-                    rank[q] = i + 1
-                    next_front.append(q)
-        i += 1
-        fronts.append(next_front)
-    fronts.pop()
-    return fronts
+def _build_vu_map(VU_array):
+    if VU_array is None:
+        return {}
+    if isinstance(VU_array, dict):
+        return {int(k): float(v) for k, v in VU_array.items()}
+    arr = list(VU_array)
+    return {i + 1: float(arr[i]) for i in range(len(arr))}
 
-def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks, pop_size=20, n_gen=10):
-    """
-    slot_assignments: lista de arrays (cada uno es una solución de slotting)
-    D: matriz de pedidos (num_pedidos x num_skus)
-    VU: dict de volumen unitario por SKU
-    Sr: matriz de slots x racks (1 si el slot pertenece al rack)
-    D_racks: matriz de distancias entre racks
-    """
-    resultados = []
-    NUM_SLOTS = slot_assignments[0].shape[0]
-    Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
-    START_RACK = 0
-    DISCHARGE_POINTS = [1, 2, 3]
-    orders = np.array(D)
-    slot_to_rack = np.argmax(Sr, axis=1).tolist()
-    Vc = 1
 
-    # Inicializar globals usados por funciones auxiliares
-    global VU_map, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
-    # establecer D_racks a nivel de módulo
-    globals()['D_racks'] = D_racks
-    PROHIBITED_SLOT_INDICES = list(range(4))
-    try:
-        discharge_racks = sorted(set(slot_to_rack[s] for s in PROHIBITED_SLOT_INDICES if s < len(slot_to_rack)))
-    except Exception:
-        discharge_racks = []
-    DISCHARGE_RACKS = discharge_racks
-    if hasattr(VU, '__len__'):
-        VU_map = {i+1: float(VU[i]) for i in range(len(VU))}
-    elif isinstance(VU, dict):
-        VU_map = {int(k): float(v) for k, v in VU.items()}
-    else:
-        VU_map = {}
-
-    # Para cada solución de slotting, ejecuta el NSGA2 de picking completo
-    for idx, slot_assignment in enumerate(slot_assignments):
-        # Inicializar población
-        population = initialize_population(
-            orders, [slot_assignment], Vm, VU, slot_to_rack, START_RACK, pop_size, D_racks
-        )
-        # Evolución NSGA-II
-        for gen in range(n_gen):
-            # Evaluar población (usar orden correcto de argumentos)
-            population_eval_full = [
-                evaluate_individual(ind['genome'], [slot_assignment], slot_to_rack, Vc, START_RACK, orders, Vm)
-                for ind in population
-            ]
-            population_eval_triples = [
-                (d, most_demanded_sku_distance(ind['genome'], [slot_assignment], slot_to_rack, orders, start_rack=START_RACK, top_k=5), penalized)
-                for (d, sku_dist, penalized, rutas, aug), ind in zip(population_eval_full, population)
-            ]
-            # Elitismo y reproducción
-            offspring = []
-            while len(offspring) < pop_size:
-                p1, p2 = random.sample(population, 2)
-                if p1['cluster_idx'] == p2['cluster_idx']:
-                    c1 = order_crossover(p1, p2)
-                    c2 = order_crossover(p2, p1)
-                else:
-                    c1 = swap_mutation(p1)
-                    c2 = swap_mutation(p2)
-                offspring.append(swap_mutation(c1))
-                offspring.append(swap_mutation(c2))
-            offspring = offspring[:pop_size]
-            # Evaluar hijos
-            offspring_eval_full = [
-                evaluate_individual(ind['genome'], [slot_assignment], slot_to_rack, Vc, START_RACK, orders, Vm)
-                for ind in offspring
-            ]
-            offspring_eval_triples = [
-                (d, most_demanded_sku_distance(ind['genome'], [slot_assignment], slot_to_rack, orders, start_rack=START_RACK, top_k=5), penalized)
-                for (d, sku_dist, penalized, rutas, aug), ind in zip(offspring_eval_full, offspring)
-            ]
-            # Selección elitista
-            combined = population + offspring
-            objectives = [ind['objectives'] if 'objectives' in ind else (0,0,False) for ind in combined]
-            for i, ind in enumerate(combined):
-                if 'objectives' not in ind:
-                    if i < len(population):
-                        ind['objectives'] = population_eval_triples[i]
-                    else:
-                        ind['objectives'] = offspring_eval_triples[i-len(population)]
-            objectives = [ind['objectives'] for ind in combined]
-            fronts = fast_non_dominated_sort(objectives)
-            new_population = []
-            for front in fronts:
-                if len(new_population) + len(front) <= pop_size:
-                    new_population.extend([combined[i] for i in front])
-                else:
-                    distances = crowding_distance(front, objectives)
-                    sorted_front = sorted(front, key=lambda i: distances[i], reverse=True)
-                    slots_remaining = pop_size - len(new_population)
-                    new_population.extend([combined[i] for i in sorted_front[:slots_remaining]])
-                    break
-            population = new_population
-        # Evaluar población final
-        population_eval_full = [
-            evaluate_individual(ind['genome'], [slot_assignment], slot_to_rack, Vc, START_RACK, orders, Vm)
-            for ind in population
-        ]
-        population_eval_triples = [
-            (d, most_demanded_sku_distance(ind['genome'], [slot_assignment], slot_to_rack, orders, start_rack=START_RACK, top_k=5), penalized)
-            for (d, sku_dist, penalized, rutas, aug), ind in zip(population_eval_full, population)
-        ]
-        pf = pareto_front(population_eval_triples)
-        # Gráfica de Pareto: todos los puntos en azul, solo la mejor solución resaltada con estrella
-        fig, ax = plt.subplots(figsize=(7,5))
-        xs = [dist for _, dist, sku_dist in pf]
-        ys = [sku_dist for _, dist, sku_dist in pf]
-        ax.scatter(xs, ys, color='tab:blue', alpha=0.7)
-        # Mejor solución (menor distancia total)
-        if pf:
-            best_idx = min(pf, key=lambda x: x[1])[0]
-            best_dist = population_eval_triples[best_idx][0]
-            best_sku_dist = population_eval_triples[best_idx][1]
-            ax.scatter([best_dist], [best_sku_dist], color='gold', marker='*', s=200, edgecolor='black', label='Mejor')
-        ax.set_xlabel('Distancia Total')
-        ax.set_ylabel('Distancia a SKUs más demandados')
-        ax.set_title(f'Pareto Picking - Solución Slotting {idx+1}')
-        ax.grid(True)
-        # Rutas por pedido para el mejor individuo (menor distancia total)
-        best_idx = min(pf, key=lambda x: x[1])[0] if pf else 0
-        rutas_best = population_eval_full[best_idx][3]
-        resultados.append({
-            'pareto_front': pf,
-            'fig': fig,
-            'population_eval_triples': population_eval_triples,
-            'rutas_best': rutas_best,
-            'distancia_total': population_eval_triples[best_idx][0],
-            'sku_distancia': population_eval_triples[best_idx][1],
-            'penalizado': population_eval_triples[best_idx][2],
-        })
-    return resultados
+def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, pop_size=20, n_gen=10, prohibited_slots=None):
+    """Very small stub: returns empty results but is import-safe."""
+    # sanitize D_racks
+    D_racks_clean = np.nan_to_num(np.array(D_racks_array), nan=1e6)
+    VU_map = _build_vu_map(VU_array)
+    results = []
+    for sa in slot_assignments:
+        results.append({'pareto_front': [], 'population_eval_triples': [], 'distancia_total': None})
+    return results

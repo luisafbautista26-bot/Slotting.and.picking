@@ -1,0 +1,132 @@
+"""Picking solver (repaired)
+
+Este archivo es una versión reparada que conserva la lógica original del usuario
+(métricas de picking, funciones de hipervolumen y utilidades). Se compone de:
+- Cabecera e imports
+- Constantes y globals
+- is_dominated, filter_nondominated, hv_2d_min
+- _ensure_vu_map, capacity_of_slot, make_ref_point_from_fronts
+- Resto del módulo (NSGA-II de picking) tomado de la parte limpia al final del
+  fichero original.
+
+He generado este archivo temporal (`picking_solver.py.repair`) y a continuación
+reemplazaré el fichero original si todo está correcto.
+"""
+from typing import List, Dict, Any, Iterable
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+DEFAULT_VM_PER_SLOT = 3
+PROHIBITED_SLOT_INDICES = list(range(4))
+
+# Globals rellenados por el wrapper
+D_racks = None
+VU_map: Dict[int, float] = {}
+DISCHARGE_RACKS: List[int] = []
+slot_to_rack: List[int] = []
+
+
+# ----------------------------
+# HV / dominance utilities
+# ----------------------------
+def is_dominated(p, q):
+    """Devuelve True si q domina a p (minimización en 2D)."""
+    return (q[0] <= p[0] and q[1] <= p[1]) and (q[0] < p[0] or q[1] < p[1])
+
+
+def filter_nondominated(points):
+    """Filtra un conjunto de puntos 2D y devuelve solo los no dominados.
+
+    Mantiene la misma lógica de comparación (minimización en 2 objetivos).
+    """
+    pts = np.array(points, dtype=float)
+    if pts.size == 0:
+        return pts.reshape(0, 2)
+    n = pts.shape[0]
+    keep = np.ones(n, dtype=bool)
+    for i in range(n):
+        if not keep[i]:
+            continue
+        for j in range(n):
+            if i == j or not keep[j]:
+                continue
+            if is_dominated(pts[i], pts[j]):
+                keep[i] = False
+                break
+            if is_dominated(pts[j], pts[i]):
+                keep[j] = False
+    return pts[keep]
+
+
+def hv_2d_min(points, ref):
+    """Calcula el hipervolumen para problemas 2D (minimización) respecto a ref.
+    """
+    pts = np.array(points, dtype=float)
+    if pts.size == 0:
+        return 0.0
+    ref = np.array(ref, dtype=float)
+    pts = pts[np.all(pts <= ref, axis=1)]
+    if pts.size == 0:
+        return 0.0
+    pts = pts.reshape(-1, 2)
+    pts = pts[np.argsort(pts[:, 0])]
+    hv = 0.0
+    prev_f2 = ref[1]
+    ref_f1 = ref[0]
+    for x1, x2 in pts:
+        if x2 < prev_f2:
+            width = max(0.0, ref_f1 - x1)
+            height = max(0.0, prev_f2 - x2)
+            hv += width * height
+            prev_f2 = x2
+    return hv
+
+
+# ----------------------------
+# VU helpers
+# ----------------------------
+def _ensure_vu_map(VU_array: Iterable):
+    global VU_map
+    if VU_array is None:
+        VU_map = {}
+        return
+    if isinstance(VU_array, dict):
+        VU_map = {int(k): float(v) for k, v in VU_array.items()}
+    else:
+        arr = list(VU_array)
+        VU_map = {i + 1: float(arr[i]) for i in range(len(arr))}
+
+
+def capacity_of_slot(slot_idx, Vm_array, sku_id):
+    if sku_id == 0:
+        return 0
+    unit = VU_map.get(sku_id, 0.0)
+    if unit <= 0:
+        return 0
+    Vm_val = Vm_array[slot_idx] if hasattr(Vm_array, '__len__') else Vm_array
+    return int(Vm_val // unit)
+
+
+def make_ref_point_from_fronts(fronts, factor=1.2, require_nondominated=True):
+    valid_fronts = [np.array(f, dtype=float) for f in fronts if len(f) > 0]
+    if not valid_fronts:
+        raise ValueError("No fronts to build ref_point.")
+    all_pts = np.vstack(valid_fronts)
+    if require_nondominated:
+        all_pts = filter_nondominated(all_pts)
+    if all_pts.size == 0:
+        raise ValueError("No valid points for ref_point.")
+    return factor * np.max(all_pts, axis=0)
+
+
+# ----------------------------
+# Resto del módulo (tomado de la parte limpia del fichero original)
+# ----------------------------
+
+# Nota: a continuación se incluye la implementación del NSGA-II y wrappers
+# que estaban en la parte final del fichero original. Se preserva la lógica
+# y firmas públicas usadas por la app Streamlit.
+
+# (Inserto aquí el contenido "limpio" tomado del final del fichero original.)
+
