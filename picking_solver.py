@@ -619,7 +619,7 @@ def nsga2_picking_streamlit(slot_assignments, D, VU=None, VU_array=None, Sr=None
             orders=D,
             slot_assignment_list=[slot_assignment],
             Vm_array=Vm,
-            VU_array=VU_array,
+            VU_array=VU_input,
             DISCHARGE_RACKS_input=discharge_racks,
             slot_to_rack_local=slot_to_rack_local,
             D_racks_array=D_racks_clean,
