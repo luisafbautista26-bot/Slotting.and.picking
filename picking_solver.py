@@ -149,7 +149,8 @@ def build_genome(orders, slot_assignment_row, Vm_array_local, slot_to_rack_local
     genome = [cluster_idx, 0]
     for order in orders:
         sub = route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, VU_map, D_racks)
-        genome += sub[1:]
+        # include route nodes and terminate each order with a 0 separator
+        genome += sub[1:] + [0]
     return genome
 
 
@@ -562,11 +563,48 @@ def nsga2_picking_streamlit(slot_assignments, D, VU=None, VU_array=None, Sr=None
     `D_racks` or `D_racks_array`. This keeps backward compatibility with the
     Streamlit UI which passes `VU=` and `D_racks=`.
     """
+    # allow updating the module-level prohibited list if necessary
+    global PROHIBITED_SLOT_INDICES
     slot_assignments_list = [np.asarray(sa) for sa in slot_assignments]
     NUM_SLOTS = int(slot_assignments_list[0].shape[0]) if len(slot_assignments_list) > 0 else 0
     Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
     slot_to_rack_local = np.argmax(Sr, axis=1).tolist() if Sr is not None else [0] * NUM_SLOTS
     prohibited = list(prohibited_slots) if prohibited_slots is not None else PROHIBITED_SLOT_INDICES
+    # If some SKUs appear only in prohibited slots (e.g. bad slotting input),
+    # temporarily relax prohibitions for picking so orders can be fulfilled.
+    # Build set of slots that are allowed (not prohibited) across all slot assignments
+    allowed_slots = set()
+    for sa in slot_assignments_list:
+        for idx, sku in enumerate(sa):
+            if idx not in prohibited:
+                allowed_slots.add(idx)
+    # Check for SKUs that appear only in prohibited slots
+    # If allowed_slots is empty or some SKU has no allowed slot, relax prohibitions
+    if len(allowed_slots) == 0:
+        # relax
+        prohibited = []
+    else:
+        # For safety, ensure that for each SKU present in orders there is at least one allowed slot
+        orders_arr = np.array(D)
+        sku_present = np.where(np.sum(orders_arr, axis=0) > 0)[0]
+        bad_skus = []
+        for sku_idx in sku_present:
+            sku_id = int(sku_idx) + 1
+            found_allowed = False
+            for sa in slot_assignments_list:
+                for idx, s in enumerate(sa):
+                    if int(s) == sku_id and idx not in prohibited:
+                        found_allowed = True
+                        break
+                if found_allowed:
+                    break
+            if not found_allowed:
+                bad_skus.append(sku_id)
+        if bad_skus:
+            # relax prohibitions if some demanded SKUs are only in prohibited slots
+            prohibited = []
+    # apply local prohibited to module-level variable used by route builder
+    PROHIBITED_SLOT_INDICES = list(prohibited)
     discharge_racks = DEFAULT_DISCHARGE_RACKS
 
     # accept both VU / VU_array and D_racks / D_racks_array keywords
