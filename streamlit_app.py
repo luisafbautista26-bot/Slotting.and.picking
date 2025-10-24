@@ -9,6 +9,10 @@ import traceback
 
 st.title("NSGA-II Slotting & Picking Optimizer")
 
+# Valores por defecto accesibles globalmente para evitar NameError si el usuario
+# ejecuta picking antes de haber corrido el slotting.
+PROHIBITED_SLOTS = {0, 1, 2, 3}
+
 # === Instrucciones para el usuario ===
 st.markdown("""
 ## Instrucciones para cargar el archivo Excel
