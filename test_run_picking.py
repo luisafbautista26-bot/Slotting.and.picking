@@ -32,7 +32,15 @@ coords = np.array([[i, (i*2)%NUM_RACKS] for i in range(NUM_RACKS)], dtype=float)
 D_racks = np.linalg.norm(coords[:,None,:] - coords[None,:,:], axis=2)
 
 print('Running nsga2_picking_streamlit test...')
-results = nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks, pop_size=6, n_gen=3)
+results = nsga2_picking_streamlit(
+    slot_assignments=slot_assignments,
+    D=D,
+    VU=VU,
+    Sr=Sr,
+    D_racks=D_racks,
+    pop_size=6,
+    n_gen=3
+)
 
 for i, res in enumerate(results):
     print(f"\n--- Result for slot_assignment {i} ---")

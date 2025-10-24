@@ -1,5 +1,9 @@
 .streamlit/secrets.toml
 
+# Generated output files
+picking_summary.csv
+picking_routes_slotting_*.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
