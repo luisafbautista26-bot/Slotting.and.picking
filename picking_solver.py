@@ -20,6 +20,10 @@ DEFAULT_VM_PER_SLOT = 3
 PROHIBITED_SLOT_INDICES = list(range(4))
 DEFAULT_DISCHARGE_RACKS = [0, 1, 2, 3, 4]
 
+# Backwards-compatible exported names expected by the Streamlit UI
+DISCHARGE_RACKS = DEFAULT_DISCHARGE_RACKS
+PROHIBITED_SLOTS = set(PROHIBITED_SLOT_INDICES)
+
 
 def is_dominated(p, q):
     return (q[0] <= p[0] and q[1] <= p[1]) and (q[0] < p[0] or q[1] < p[1])
@@ -212,7 +216,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     return filtered
 
 
-def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack=0, top_k=5):
+def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, D_racks, start_rack=0, top_k=5):
     cluster_idx = genome[0]
     slot_assignment_row = slot_assignments[cluster_idx]
     sku_demands = np.sum(orders, axis=0)
@@ -284,7 +288,7 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
         if penalized:
             break
 
-    sku_dist = most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack)
+    sku_dist = most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, D_racks, start_rack)
     return float(total_distance), float(sku_dist), bool(penalized), rutas_por_pedido, augmented
 
 
@@ -551,15 +555,25 @@ def nsga2_picking_loop(orders, slot_assignment_list, Vm_array, VU_array,
     return population, best_inds, best_fitnesses
 
 
-def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, pop_size=20, n_gen=10, prohibited_slots=None):
+def nsga2_picking_streamlit(slot_assignments, D, VU=None, VU_array=None, Sr=None, D_racks=None, D_racks_array=None, pop_size=20, n_gen=10, prohibited_slots=None):
+    """Wrapper for Streamlit and external callers.
+
+    Accepts both keyword names used historically: `VU` or `VU_array`, and
+    `D_racks` or `D_racks_array`. This keeps backward compatibility with the
+    Streamlit UI which passes `VU=` and `D_racks=`.
+    """
     slot_assignments_list = [np.asarray(sa) for sa in slot_assignments]
     NUM_SLOTS = int(slot_assignments_list[0].shape[0]) if len(slot_assignments_list) > 0 else 0
     Vm = np.full(NUM_SLOTS, DEFAULT_VM_PER_SLOT)
     slot_to_rack_local = np.argmax(Sr, axis=1).tolist() if Sr is not None else [0] * NUM_SLOTS
     prohibited = list(prohibited_slots) if prohibited_slots is not None else PROHIBITED_SLOT_INDICES
     discharge_racks = DEFAULT_DISCHARGE_RACKS
-    VU_map = _build_vu_map(VU_array)
-    D_racks_clean = np.nan_to_num(np.array(D_racks_array), nan=1e6)
+
+    # accept both VU / VU_array and D_racks / D_racks_array keywords
+    VU_input = VU if VU is not None else VU_array
+    D_racks_input = D_racks if D_racks is not None else D_racks_array
+    VU_map = _build_vu_map(VU_input)
+    D_racks_clean = np.nan_to_num(np.array(D_racks_input), nan=1e6)
 
     results = []
     for slot_assignment in slot_assignments_list:
@@ -600,35 +614,4 @@ def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, po
             'augmented_best': population_eval_full[0][4] if population_eval_full else [],
         })
 
-    return results
-"""Minimal clean picking_solver stub for import testing.
-
-This file is intentionally small and safe. It will be replaced later by the
-full implementation once the workspace is stable.
-"""
-
-import numpy as np
-from typing import List, Dict
-
-PROHIBITED_SLOT_INDICES = list(range(4))
-DEFAULT_DISCHARGE_RACKS = [0, 1, 2, 3, 4]
-
-
-def _build_vu_map(VU_array):
-    if VU_array is None:
-        return {}
-    if isinstance(VU_array, dict):
-        return {int(k): float(v) for k, v in VU_array.items()}
-    arr = list(VU_array)
-    return {i + 1: float(arr[i]) for i in range(len(arr))}
-
-
-def nsga2_picking_streamlit(slot_assignments, D, VU_array, Sr, D_racks_array, pop_size=20, n_gen=10, prohibited_slots=None):
-    """Very small stub: returns empty results but is import-safe."""
-    # sanitize D_racks
-    D_racks_clean = np.nan_to_num(np.array(D_racks_array), nan=1e6)
-    VU_map = _build_vu_map(VU_array)
-    results = []
-    for sa in slot_assignments:
-        results.append({'pareto_front': [], 'population_eval_triples': [], 'distancia_total': None})
     return results
