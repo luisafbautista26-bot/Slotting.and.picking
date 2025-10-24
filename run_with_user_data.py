@@ -96,7 +96,15 @@ try:
 except Exception as e:
     print('Warning: failed to sanitize D_racks:', e)
 
-res = nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks, pop_size=10, n_gen=5)
+res = nsga2_picking_streamlit(
+    slot_assignments=slot_assignments,
+    D=D,
+    VU=VU,
+    Sr=Sr,
+    D_racks=D_racks,
+    pop_size=10,
+    n_gen=5
+)
 
 for i, r in enumerate(res):
     print('\nResult for slot assignment', i)
