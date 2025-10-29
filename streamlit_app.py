@@ -69,6 +69,7 @@ st.header("Ejecución del algoritmo NSGA-II")
 
 # --- Integración del algoritmo NSGA-II ---
 import nsga2_solver
+import importlib
 
 if st.button("Ejecutar optimización"):
     try:
@@ -99,7 +100,19 @@ if st.button("Ejecutar optimización"):
         user_prohibited = []
 
         if VU_df is not None:
-            VU = {i: float(row[1]) for i, row in enumerate(VU_df.values)}
+            # Construir mapa VU con claves de SKU 1-based cuando sea posible.
+            # Si la hoja VU tiene una primera columna con el id del SKU, úsala.
+            VU = {}
+            for i, row in enumerate(VU_df.values):
+                # row puede ser un array tipo [sku, volumen] o solo [volumen]
+                try:
+                    sku_key = int(row[0])
+                    vol = float(row[1])
+                except Exception:
+                    # fallback: usar índice 1-based
+                    sku_key = i + 1
+                    vol = float(row[1]) if len(row) > 1 else float(row[0])
+                VU[int(sku_key)] = float(vol)
         else:
             st.error("No se encontró la hoja 'VU' en el Excel.")
             st.stop()
@@ -113,10 +126,11 @@ if st.button("Ejecutar optimización"):
         if VU_df is not None:
             num_vu = len(VU)
             num_d = D.shape[1]
-            st.write(f"Índices de VU: {list(VU.keys())}")
-            st.write(f"Número de columnas en D: {num_d}")
-            if list(VU.keys()) != list(range(num_d)):
-                st.error(f"Los índices de VU ({list(VU.keys())}) no coinciden con los índices esperados (0 a {num_d-1}).\nRevisa que no haya filas vacías o desfasadas en la hoja VU y que el número de columnas en D sea correcto.")
+            st.write(f"Índices de VU (mapeo SKU->volumen): {sorted(list(VU.keys()))}")
+            st.write(f"Número de columnas en D (SKUs): {num_d}")
+            expected_keys = list(range(1, num_d + 1))
+            if sorted(list(VU.keys())) != expected_keys:
+                st.error(f"Los índices de VU ({sorted(list(VU.keys()))}) no coinciden con los índices esperados (1 a {num_d}).\nRevisa que la hoja 'VU' tenga como primera columna el id de SKU o, si no, que las filas estén en el orden correcto; la app ahora espera claves 1-based para los SKUs.")
                 st.stop()
 
         NUM_SKUS = D.shape[1]
@@ -176,7 +190,8 @@ if st.button("Ejecutar optimización"):
         - **f2 (Costo de picking):** El costo total de recoger los productos, considerando la distancia y la demanda (menos es mejor).
         Cada punto azul en la gráfica es una solución eficiente (óptima en el sentido de Pareto).
         """)
-        st.markdown("**Nota:** en la optimización de picking los puntos de descarga están fijados a los racks [1, 2, 3] y el punto de inicio es el rack 0.")
+        st.markdown("**Nota:** en la optimización de picking los puntos de descarga por defecto son los racks 0, 1, 2 y 3 (es decir, los 4 primeros índices) y el punto de inicio es el rack 0.")
+
         f1_vals = [f[0] for f in pareto_fitness]
         f2_vals = [f[1] for f in pareto_fitness]
         fig, ax = plt.subplots(figsize=(7,5))
@@ -221,12 +236,15 @@ if st.button("Ejecutar optimización"):
 
     # Mostrar valores efectivos del módulo de picking (ayuda a verificar el estado en tiempo de ejecución)
     try:
-        import picking_solver
+        # intentar importar y recargar picking_solver para reflejar cambios en código sin reiniciar Streamlit
+        picking_solver = importlib.import_module('picking_solver')
+        importlib.reload(picking_solver)
         st.info(f"Valores en picking_solver: DISCHARGE_RACKS = {picking_solver.DISCHARGE_RACKS}, DEFAULT_VM_PER_SLOT = {picking_solver.DEFAULT_VM_PER_SLOT}, start_rack = 0")
     except Exception:
         # Fallback a un módulo mínimo que creamos para desbloquear la ejecución mientras se repara picking_solver.py
         try:
-            import picking_solver_minimal as picking_solver
+            picking_solver = importlib.import_module('picking_solver_minimal')
+            importlib.reload(picking_solver)
             st.warning("Se está usando 'picking_solver_minimal' como respaldo; reinicia Streamlit cuando 'picking_solver' esté reparado para usar la implementación completa.")
             st.info(f"Valores en picking_solver (fallback): DISCHARGE_RACKS = {picking_solver.DISCHARGE_RACKS}, DEFAULT_VM_PER_SLOT = {picking_solver.DEFAULT_VM_PER_SLOT}, start_rack = 0")
         except Exception:
@@ -239,14 +257,17 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
     st.markdown("""
     Ahora puedes optimizar el picking usando todas las soluciones de slotting encontradas.
     """)
+
     if st.button("Ejecutar optimización de picking para todas las soluciones de slotting"):
         st.info("Ejecutando NSGA-II de picking para todas las soluciones de slotting...")
         try:
             # Intentar importar la implementación completa; si falla, usar el módulo mínimo como respaldo
             try:
-                import picking_solver
+                picking_solver = importlib.import_module('picking_solver')
+                importlib.reload(picking_solver)
             except Exception:
-                import picking_solver_minimal as picking_solver
+                picking_solver = importlib.import_module('picking_solver_minimal')
+                importlib.reload(picking_solver)
                 st.warning("Usando 'picking_solver_minimal' como respaldo para ejecutar picking.")
 
             resultados_picking = picking_solver.nsga2_picking_streamlit(
@@ -260,7 +281,13 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 prohibited_slots=list(PROHIBITED_SLOTS),
             )
 
-            st.success(f"¡Optimización de picking completada para {len(st.session_state['slotting_solutions'])} soluciones de slotting!")
+            # nsga2_picking_streamlit returns a combined result dict when run across
+            # all slotting solutions. Normalize to a list for downstream code that
+            # expects an iterable of results per-slotting (for compatibility).
+            if isinstance(resultados_picking, dict):
+                resultados_picking = [resultados_picking]
+
+            st.success(f"¡Optimización de picking completada para {len(resultados_picking)} conjuntos de soluciones de slotting (combinado)!")
 
             # Unificar la gráfica de Pareto de todas las soluciones: todos los puntos en azul, mejor solución con estrella dorada
             fig, ax = plt.subplots(figsize=(7,5))
@@ -302,11 +329,103 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 st.write(f"**Mejor individuo:**\n- Distancia total: {res['distancia_total']:.2f}\n- Distancia a SKUs más demandados: {res['sku_distancia']:.2f}\n- Penalización: {'Sí' if res['penalizado'] else 'No'}" + ("\n\n:star: **Esta es la mejor solución global de picking**" if es_mejor_global else ""))
                 st.write("**Rutas de picking por pedido (mejor individuo):**")
                 rutas_best = res['rutas_best']
+
+                # obtener racks de descarga usados por el solver para resaltarlos
+                try:
+                    discharge_racks_ui = getattr(picking_solver, 'DISCHARGE_RACKS', [])
+                except Exception:
+                    discharge_racks_ui = []
+
+                def format_route(route, discharge_racks_local):
+                    # route es lista de ints; mostrar solo los números de racks (sin prefijo 'D')
+                    # El usuario pidió que no se muestre la notación D(x) en la ruta.
+                    out = [str(v) for v in route]
+                    return ' → '.join(out)
+
                 rutas_tabla = pd.DataFrame({
                     'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
-                    'Ruta': [' → '.join(map(str, ruta)) for ruta in rutas_best]
+                    'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
                 })
                 st.dataframe(rutas_tabla)
+                # Mostrar el genoma aumentado asociado al mejor individuo (si está disponible)
+                augmented_display = None
+                try:
+                    augmented_display = res.get('augmented_best')
+                except Exception:
+                    augmented_display = None
+                # si no está en res, intentar extraerlo del individuo en population_eval_triples
+                if augmented_display is None:
+                    try:
+                        pf = res.get('pareto_front', [])
+                        if pf:
+                            best_idx = pf[0][0]
+                        else:
+                            best_idx = 0
+                        augmented_display = res['population_eval_triples'][best_idx][4]
+                    except Exception:
+                        augmented_display = None
+
+                if augmented_display is not None:
+                    st.markdown('**Genome aumentado (puntos de descarga visibles):**')
+                    st.write(augmented_display)
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
             st.text(traceback.format_exc())
+
+# --- Utilidades para depuración en la UI ---
+st.markdown("---")
+st.header("Herramientas de depuración")
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("Limpiar sesión (slotting_solutions)"):
+        keys = ['slotting_solutions', 'D', 'VU', 'Sr', 'D_racks']
+        for k in keys:
+            if k in st.session_state:
+                del st.session_state[k]
+        st.success("Sesión limpiada: se han eliminado las soluciones de slotting de la sesión.")
+
+with col2:
+    if st.button("Recargar módulo picking_solver"):
+        try:
+            picking_solver = importlib.import_module('picking_solver')
+            importlib.reload(picking_solver)
+            st.success("Módulo 'picking_solver' recargado desde disco.")
+        except Exception as e:
+            st.error(f"No se pudo recargar 'picking_solver': {e}")
+
+st.markdown("---")
+st.subheader("Cargar y visualizar results_summary.json (desde disco)")
+from pathlib import Path
+res_path = Path('results_summary.json')
+if st.button('Cargar results_summary.json'):
+    if not res_path.exists():
+        st.error('No se encontró results_summary.json en el workspace.')
+    else:
+        try:
+            import json
+            txt = res_path.read_text(encoding='utf-8')
+            data = json.loads(txt)
+            # construir resumen
+            rows = []
+            for e in data:
+                idx = e.get('index')
+                if 'result' in e and e['result']:
+                    r = e['result']
+                    dist = r.get('distancia_total')
+                    sku_dist = r.get('sku_distancia')
+                    penal = r.get('penalizado')
+                    rutas = r.get('rutas_best') or []
+                    n_rutas = len(rutas)
+                else:
+                    dist = None
+                    sku_dist = None
+                    penal = None
+                    n_rutas = None
+                rows.append({'index': idx, 'distancia_total': dist, 'sku_distancia': sku_dist, 'penalizado': penal, 'n_rutas': n_rutas})
+            import pandas as _pd
+            df = _pd.DataFrame(rows)
+            st.dataframe(df.sort_values('index'))
+            # ofrecer descarga del JSON tal cual
+            st.download_button('Descargar results_summary.json', txt, file_name='results_summary.json', mime='application/json')
+        except Exception as e:
+            st.error(f'Error leyendo results_summary.json: {e}')
