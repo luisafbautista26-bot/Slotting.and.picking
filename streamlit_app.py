@@ -270,6 +270,63 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 importlib.reload(picking_solver)
                 st.warning("Usando 'picking_solver_minimal' como respaldo para ejecutar picking.")
 
+            # --- Validación previa: detectar pedidos que solo podrían ir a racks de descarga ---
+            # Esto ayuda a evitar rutas tipo 0 -> descarga -> 0 cuando puede haber un
+            # problema de asignación de SKUs a racks o slots prohibidos.
+            slotting_solutions = st.session_state.get('slotting_solutions', [])
+            # Obtener Sr y D desde la sesión (guardados al ejecutar slotting). Si no existen,
+            # avisar al usuario y detener la ejecución del botón de picking.
+            Sr_local = st.session_state.get('Sr')
+            D_local = st.session_state.get('D')
+            if Sr_local is None or D_local is None:
+                st.error("Faltan datos requeridos para ejecutar picking: 'Sr' o 'D' no están en la sesión. Ejecuta primero el slotting y vuelve a intentar.")
+                st.stop()
+            slot_to_rack_local = np.argmax(Sr_local, axis=1).tolist()
+            # derive discharge racks similarly a picking: from PROHIBITED_SLOTS -> racks
+            discharge_racks_ui = sorted(set(slot_to_rack_local[s] for s in PROHIBITED_SLOTS if 0 <= s < len(slot_to_rack_local)))
+            try:
+                discharge_racks_ui = [int(r) for r in discharge_racks_ui if int(r) != 0]
+            except Exception:
+                pass
+            if not discharge_racks_ui:
+                discharge_racks_ui = [1, 2, 3]
+
+            problematic_overall = []
+            for sol_idx, slot_assign in enumerate(slotting_solutions):
+                problems = []
+                for order_idx, order in enumerate(D_local):
+                    demand_keys = set(int(i+1) for i, q in enumerate(order) if q > 0)
+                    # buscar al menos un slot (no prohibido) que tenga alguno de los SKUs
+                    # y cuyo rack NO sea un rack de descarga
+                    found_non_discharge = False
+                    for slot_idx, sku in enumerate(slot_assign):
+                        try:
+                            sku_id = int(sku)
+                        except Exception:
+                            continue
+                        if sku_id == 0:
+                            continue
+                        if sku_id not in demand_keys:
+                            continue
+                        if slot_idx in PROHIBITED_SLOTS:
+                            continue
+                        rack = slot_to_rack_local[slot_idx]
+                        if rack not in discharge_racks_ui:
+                            found_non_discharge = True
+                            break
+                    if not found_non_discharge:
+                        problems.append(order_idx)
+                if problems:
+                    problematic_overall.append((sol_idx, problems))
+
+            if problematic_overall:
+                st.warning("Se detectaron pedidos que sólo podrían servirse desde racks de descarga en algunas soluciones de slotting. Revisa la lista antes de ejecutar picking.")
+                for sol_idx, probs in problematic_overall:
+                    st.write(f"- Solución de slotting {sol_idx+1}: pedidos potencialmente problemáticos (0-based indices): {probs}")
+                ignore_and_run = st.checkbox("Ignorar advertencias y ejecutar picking de todos modos")
+                if not ignore_and_run:
+                    st.stop()
+
             resultados_picking = picking_solver.nsga2_picking_streamlit(
                 slot_assignments=st.session_state['slotting_solutions'],
                 D=st.session_state['D'],
@@ -280,6 +337,44 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 n_gen=10,     # puedes ajustar
                 prohibited_slots=list(PROHIBITED_SLOTS),
             )
+
+            # ---- DEBUG helper (inspección rápida) ----
+            try:
+                res = resultados_picking if 'resultados_picking' in locals() else None
+                if isinstance(res, list):
+                    r0 = res[0]
+                else:
+                    r0 = res
+                aug = None
+                try:
+                    aug = r0.get('augmented_best') if r0 is not None else None
+                except Exception:
+                    aug = None
+
+                print("TYPE augmented_best:", type(aug))
+                # Si es numpy array o lista con índices, convertir a lista simple
+                try:
+                    aug_list = list(aug)
+                except Exception:
+                    try:
+                        import numpy as _np
+                        aug_list = _np.asarray(aug).tolist()
+                    except Exception:
+                        aug_list = aug
+
+                print("LENGTH augmented:", None if aug_list is None else len(aug_list))
+                print("FIRST 40 genes (compact):", aug_list[:40] if aug_list is not None else None)
+
+                # intentar interpretar si es una asignación slot->sku (muchos índices con ceros intermitentes)
+                zero_frac = sum(1 for x in aug_list if int(x) == 0) / len(aug_list) if aug_list else None
+                print("Fracción de ceros en augmented:", zero_frac)
+
+                # Si los valores parecen estar indexados como 'i:val' (tu salida), intentar reconstruir secuencia por valor:
+                if aug_list and isinstance(aug_list[0], (tuple, list)) and len(aug_list[0]) == 2:
+                    vals = [v for (_, v) in aug_list]
+                    print("Reconstructed vals:", vals[:80])
+            except Exception as _e:
+                print('DEBUG helper failed:', _e)
 
             # nsga2_picking_streamlit returns a combined result dict when run across
             # all slotting solutions. Normalize to a list for downstream code that
@@ -331,8 +426,9 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 rutas_best = res['rutas_best']
 
                 # obtener racks de descarga usados por el solver para resaltarlos
+                # preferir los racks devueltos por el solver en res (discharge_racks)
                 try:
-                    discharge_racks_ui = getattr(picking_solver, 'DISCHARGE_RACKS', [])
+                    discharge_racks_ui = res.get('discharge_racks') or getattr(picking_solver, 'DISCHARGE_RACKS', [])
                 except Exception:
                     discharge_racks_ui = []
 
@@ -342,17 +438,14 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                     out = [str(v) for v in route]
                     return ' → '.join(out)
 
-                rutas_tabla = pd.DataFrame({
-                    'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
-                    'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
-                })
-                st.dataframe(rutas_tabla)
-                # Mostrar el genoma aumentado asociado al mejor individuo (si está disponible)
+                # Preferir mostrar el genoma aumentado completo (no separado por pedido).
+                # Si no está disponible, mostrar la tabla de rutas por pedido como fallback.
                 augmented_display = None
                 try:
                     augmented_display = res.get('augmented_best')
                 except Exception:
                     augmented_display = None
+
                 # si no está en res, intentar extraerlo del individuo en population_eval_triples
                 if augmented_display is None:
                     try:
@@ -361,13 +454,159 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                             best_idx = pf[0][0]
                         else:
                             best_idx = 0
-                        augmented_display = res['population_eval_triples'][best_idx][4]
+                        pet = res.get('population_eval_triples', {})
+                        if pet and best_idx in pet:
+                            augmented_display = pet[best_idx][4]
                     except Exception:
                         augmented_display = None
 
+                # --- Replace the augmented_display handling with a more robust block ---
                 if augmented_display is not None:
-                    st.markdown('**Genome aumentado (puntos de descarga visibles):**')
-                    st.write(augmented_display)
+                    st.markdown('**Genome aumentado por pedido (cada fila muestra la secuencia con puntos de descarga):**')
+                    try:
+                        # canonicalize augmented_display into a Python list
+                        seq = list(augmented_display)
+
+                        # If augmented_display looks like a slot->sku assignment (length similar to NUM_SLOTS),
+                        # rebuild a route-genome and re-evaluate to get the true augmented genome.
+                        # This fixes cases where picking_solver accidentally returned the slotting assignment.
+                        try:
+                            # NUM_SLOTS is available in outer scope (from earlier when reading Sr)
+                            is_slot_assign = isinstance(seq, list) and len(seq) >= NUM_SLOTS
+                        except Exception:
+                            is_slot_assign = False
+
+                        if is_slot_assign:
+                            # Rebuild genome and re-evaluate using picking_solver functions
+                            try:
+                                # slot_assign is the slotting solution we passed to picking; prefer to get the one used:
+                                slot_assign_for_display = slot_assign if 'slot_assign' in locals() else seq
+                                # Build a route-genome from the orders and this slot assignment
+                                genome_rebuilt = picking_solver.build_genome(
+                                    orders=np.array(D),
+                                    slot_assignment_row=np.asarray(slot_assign_for_display),
+                                    Vm_array_local=np.full(len(slot_assign_for_display), picking_solver.DEFAULT_VM_PER_SLOT),
+                                    slot_to_rack_local=np.argmax(np.asarray(Sr), axis=1).tolist(),
+                                    start_rack=0,
+                                    cluster_idx=0,
+                                    VU_map={i+1: VU[i] for i in range(len(VU))} if isinstance(VU, dict) is False else VU,
+                                    D_racks=np.array(D_racks),
+                                    PROHIBITED_SLOT_INDICES=list(PROHIBITED_SLOTS)
+                                )
+                                # Re-evaluate to get augmented genome
+                                _, _, _, augmented_for_display = picking_solver.evaluate_individual(
+                                    genome_rebuilt,
+                                    [np.asarray(slot_assign_for_display)],
+                                    np.argmax(np.asarray(Sr), axis=1).tolist(),
+                                    box_volume_max=1.0,
+                                    start_rack=0,
+                                    orders=np.array(D),
+                                    Vm_array_local=np.full(len(slot_assign_for_display), picking_solver.DEFAULT_VM_PER_SLOT),
+                                    VU_map={i+1: VU[i] for i in range(len(VU))} if isinstance(VU, dict) is False else VU,
+                                    D_racks=np.array(D_racks),
+                                    PROHIBITED_SLOT_INDICES=list(PROHIBITED_SLOTS)
+                                )
+                                seq = list(augmented_for_display)
+                            except Exception as e_rebuild:
+                                # If rebuild fails, fall back to treating seq as-is (we'll still format best-effort)
+                                print("DEBUG: rebuild genome failed:", e_rebuild)
+                                seq = list(augmented_display)
+
+                        # Now seq should be the augmented genome in the form [cluster_idx, 0, ..., 0, ...]
+                        # Remove prefix [cluster_idx, 0] if present
+                        body = seq[2:] if len(seq) >= 2 and seq[1] == 0 else seq[:]
+
+                        # Mostrar también el genoma aumentado LITERALmente tal como lo devolvió el solver.
+                        # El usuario pidió explícitamente que 0 inicie y termine y que no se muestre
+                        # la etiqueta textual "(punto de descarga)", por lo que aquí imprimimos
+                        # la secuencia tal cual (solo números) separada por ' → '.
+                        try:
+                            st.markdown('**Genoma aumentado (literal, tal como en `augmented_best`):**')
+                            st.write(' → '.join(str(int(x)) for x in seq))
+                        except Exception:
+                            # si por algún motivo seq no es iterable o contiene tipos raros, hacer fallback seguro
+                            try:
+                                st.write(seq)
+                            except Exception:
+                                pass
+
+                        # Derive discharge_racks to display. Prefer res value, then module default, then compute from PROHIBITED_SLOTS.
+                        discharge_racks_ui = res.get('discharge_racks') if isinstance(res, dict) and res.get('discharge_racks') else getattr(picking_solver, 'DISCHARGE_RACKS', [])
+                        # Ensure discharge racks do NOT include rack 0. User requires discharge racks to be 1,2,3 at minimum.
+                        try:
+                            discharge_racks_ui = [int(r) for r in discharge_racks_ui if int(r) != 0]
+                        except Exception:
+                            pass
+                        if not discharge_racks_ui:
+                            # compute from Sr & PROHIBITED_SLOTS as fallback (exclude rack 0)
+                            try:
+                                slot_to_rack_local = np.argmax(np.asarray(Sr), axis=1).tolist()
+                                discharge_racks_ui = sorted(set(slot_to_rack_local[s] for s in PROHIBITED_SLOTS if 0 <= s < len(slot_to_rack_local) and slot_to_rack_local[s] != 0))
+                            except Exception:
+                                discharge_racks_ui = []
+                        # ultimate fallback: ensure at least [1,2,3]
+                        if not discharge_racks_ui:
+                            discharge_racks_ui = [1, 2, 3]
+
+                        # split by orders (0 separators)
+                        orders_segments = []
+                        cur = []
+                        for v in body:
+                            if int(v) == 0:
+                                orders_segments.append(cur)
+                                cur = []
+                            else:
+                                cur.append(int(v))
+                        if cur:
+                            orders_segments.append(cur)
+
+                        # Build display rows; ensure that before final 0 we mark/insert nearest discharge if needed
+                        pedidos = []
+                        rutas_aug = []
+                        for i, seg in enumerate(orders_segments):
+                            pedidos.append(f'Pedido {i+1}')
+                            if len(seg) == 0:
+                                rutas_aug.append('0 → 0')
+                                continue
+
+                            display_seq = []
+                            for rack in seg:
+                                # mark if rack itself is a discharge (show only the rack number, no textual tag)
+                                display_seq.append(str(rack))
+
+                            # If last rack is not a discharge, insert nearest discharge for display
+                            try:
+                                last_rack = seg[-1]
+                                if discharge_racks_ui and last_rack not in discharge_racks_ui:
+                                    # find nearest discharge using D_racks and append its number (no textual tag)
+                                    try:
+                                        nearest = min(discharge_racks_ui, key=lambda dp: D_racks[last_rack, dp])
+                                        display_seq.append(f"{int(nearest)}")
+                                    except Exception:
+                                        # if D_racks not usable, fallback to first discharge_rack
+                                        display_seq.append(f"{int(discharge_racks_ui[0])}")
+                            except Exception:
+                                pass
+
+                            rutas_aug.append('0 → ' + ' → '.join(display_seq) + ' → 0')
+
+                        rutas_tabla = pd.DataFrame({'Pedido': pedidos, 'Genome aumentado': rutas_aug})
+                        st.dataframe(rutas_tabla)
+
+                    except Exception as e_display:
+                        print("DEBUG: error while formatting augmented_display:", e_display)
+                        # fallback: show rutas_best (existing behavior)
+                        rutas_tabla = pd.DataFrame({
+                            'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
+                            'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
+                        })
+                        st.dataframe(rutas_tabla)
+                else:
+                    rutas_tabla = pd.DataFrame({
+                        'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
+                        'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
+                    })
+                    st.dataframe(rutas_tabla)
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
             st.text(traceback.format_exc())
@@ -429,3 +668,20 @@ if st.button('Cargar results_summary.json'):
             st.download_button('Descargar results_summary.json', txt, file_name='results_summary.json', mime='application/json')
         except Exception as e:
             st.error(f'Error leyendo results_summary.json: {e}')
+try:
+    # Preferir mostrar el debug en la UI cuando la variable está disponible
+    if 'resultados_picking' in locals() and resultados_picking:
+        try:
+            st.write("DEBUG - augmented_best:", resultados_picking[0].get('augmented_best'))
+        except Exception:
+            # Si por algún motivo st.write falla en este punto, caer al print de consola
+            print("DEBUG - augmented_best (console):", resultados_picking[0].get('augmented_best'))
+    else:
+        # No hay resultados de picking en este pase de ejecución; imprimir nota en consola
+        print("DEBUG - resultados_picking no está definido en el contexto actual (aún no se ejecutó picking)")
+except Exception as e:
+    # Protección extra: en caso de errores inesperados no romper la carga de la app
+    try:
+        print("DEBUG - error comprobando augmented_best:", e)
+    except Exception:
+        pass
