@@ -548,19 +548,47 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                         if not discharge_racks_ui:
                             discharge_racks_ui = [1, 2, 3]
 
-                        # split by orders (0 separators)
-                        orders_segments = []
+                        # split by orders (0 separators) but treat consecutive zeros safely
+                        # and limit the number of displayed pedidos to the number of
+                        # non-empty orders actually present in D (esto evita que
+                        # segmentos vacíos inflen el contador en la UI).
+                        raw_segments = []
                         cur = []
                         for v in body:
                             if int(v) == 0:
-                                orders_segments.append(cur)
+                                raw_segments.append(cur)
                                 cur = []
                             else:
                                 cur.append(int(v))
                         if cur:
-                            orders_segments.append(cur)
+                            raw_segments.append(cur)
 
-                        # Build display rows; ensure that before final 0 we mark/insert nearest discharge if needed
+                        # número esperado de pedidos (filas no vacías en D)
+                        try:
+                            expected_orders = int(np.sum(np.any(np.asarray(D) != 0, axis=1)))
+                        except Exception:
+                            expected_orders = None
+
+                        # Filtrar segmentos vacíos (producidos por ceros consecutivos)
+                        orders_segments = [seg for seg in raw_segments if len(seg) > 0]
+
+                        # Si hay más segmentos detectados que pedidos reales, truncar
+                        if expected_orders is not None and len(orders_segments) > expected_orders:
+                            orders_segments = orders_segments[:expected_orders]
+
+                        # Mostrar un banner de diagnóstico compacto para depuración rápida
+                        try:
+                            zero_frac = sum(1 for x in seq if int(x) == 0) / len(seq) if seq else None
+                        except Exception:
+                            zero_frac = None
+                        st.info(f"Diagnóstico: D.shape={np.asarray(D).shape}, pedidos_no_vacíos={expected_orders}, len(augmented)={len(seq)}, fracción_ceros={zero_frac}")
+
+                        # Build display rows: show the augmented genome segments exactly
+                        # as returned by the solver (incluye los racks de descarga
+                        # que ya insertó `insert_discharge_points_and_boxes`). No
+                        # intentamos insertar racks adicionales aquí; simplemente
+                        # mostramos lo que devolvió el solver, para mantener la
+                        # correspondencia exacta.
                         pedidos = []
                         rutas_aug = []
                         for i, seg in enumerate(orders_segments):
@@ -568,27 +596,9 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                             if len(seg) == 0:
                                 rutas_aug.append('0 → 0')
                                 continue
-
-                            display_seq = []
-                            for rack in seg:
-                                # mark if rack itself is a discharge (show only the rack number, no textual tag)
-                                display_seq.append(str(rack))
-
-                            # If last rack is not a discharge, insert nearest discharge for display
-                            try:
-                                last_rack = seg[-1]
-                                if discharge_racks_ui and last_rack not in discharge_racks_ui:
-                                    # find nearest discharge using D_racks and append its number (no textual tag)
-                                    try:
-                                        nearest = min(discharge_racks_ui, key=lambda dp: D_racks[last_rack, dp])
-                                        display_seq.append(f"{int(nearest)}")
-                                    except Exception:
-                                        # if D_racks not usable, fallback to first discharge_rack
-                                        display_seq.append(f"{int(discharge_racks_ui[0])}")
-                            except Exception:
-                                pass
-
-                            rutas_aug.append('0 → ' + ' → '.join(display_seq) + ' → 0')
+                            # mostrar la secuencia tal cual (los racks de descarga
+                            # estarán presentes si el solver los insertó)
+                            rutas_aug.append('0 → ' + ' → '.join(str(int(r)) for r in seg) + ' → 0')
 
                         rutas_tabla = pd.DataFrame({'Pedido': pedidos, 'Genome aumentado': rutas_aug})
                         st.dataframe(rutas_tabla)

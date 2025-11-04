@@ -159,10 +159,18 @@ def build_genome(orders, slot_assignment_row, Vm_array_local, slot_to_rack_local
     """
     genome = [cluster_idx, 0]
     for order in orders:
+        # skip completely empty orders (rows with all zeros) to avoid creating
+        # unnecessary 0-separators that later confuse routing/counting.
+        if not any((qty > 0) for qty in order):
+            # do not add a separator for empty orders; downstream code
+            # (insert_discharge_points_and_boxes/evaluate_individual)
+            # counts non-empty orders and will produce consistent output.
+            continue
         sub = route_for_order(order, slot_assignment_row, Vm_array_local, slot_to_rack_local, start_rack, VU_map, D_racks, PROHIBITED_SLOT_INDICES)
         # sub es [start_rack, r1, r2, ..., start_rack]
         if len(sub) <= 2:
-            # pedido sin visitas: añadir separador vacío, insertion posterior añadirá descarga
+            # pedido sin visitas consideramos que no añadimos racks intermedios;
+            # dejamos que insert_discharge_points_and_boxes inserte descarga si procede
             genome += [0]
         else:
             genome += sub[1:-1] + [0]
@@ -185,14 +193,30 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     box_vol = 0.0
     orders_arr = np.array(orders)
     order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
-    num_orders = len(order_demands)
+    # number of non-empty orders (some input files may have empty rows)
+    num_orders = sum(1 for d in order_demands if any(q > 0 for q in d.values()))
+
+    # Normalize parameter names: use a local 'discharge_racks' variable (from
+    # the incoming parameter). If it's None or empty, fall back to the module
+    # default DISCHARGE_RACKS constant.
+    discharge_racks = list(DISCHARGE_RACKS) if DISCHARGE_RACKS is not None else list(DEFAULT_DISCHARGE_RACKS)
 
     def append_nearest_discharge(state_list, curr):
         # usar siempre el parámetro local 'discharge_racks' (respeta override)
         if not discharge_racks:
             return curr
-        nearest_discharge = min(discharge_racks, key=lambda dp: D_racks[curr, dp])
-        state_list.append(nearest_discharge)
+        # prefer a discharge rack that is not equal to start_rack and not equal
+        # to the last appended rack (avoid 0 -> discharge -> 0 and duplicates)
+        candidates = [dp for dp in discharge_racks if dp != start_rack and (not state_list or dp != state_list[-1])]
+        if not candidates:
+            # fallback: allow any discharge except repeating the last element
+            candidates = [dp for dp in discharge_racks if not state_list or dp != state_list[-1]]
+            if not candidates:
+                return curr
+        nearest_discharge = min(candidates, key=lambda dp: D_racks[curr, dp])
+        # only append if it's different from the last appended element
+        if not state_list or nearest_discharge != state_list[-1]:
+            state_list.append(nearest_discharge)
         return nearest_discharge
 
     while i < len(genome):
@@ -272,6 +296,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                 box_vol = 0.0
 
             new_genome.append(0)
+            # advance to next non-empty order index: we count separators as closing
             order_idx += 1
             current_rack = start_rack
             box_vol = 0.0
@@ -315,7 +340,26 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
         if new_genome[j] == filtered[-1]:
             continue
         filtered.append(new_genome[j])
-    return filtered
+    # Second-pass cleanup: remove trivial discharge-only subroutes 0 -> d -> 0
+    # when d is a discharge rack (they create empty segments). We keep a
+    # single 0 separator.
+    cleaned = []
+    k = 0
+    while k < len(filtered):
+        if k + 2 < len(filtered) and filtered[k] == 0 and filtered[k+2] == 0 and filtered[k+1] in discharge_racks:
+            # skip the middle discharge rack
+            cleaned.append(0)
+            k += 3
+            # collapse possible consecutive zeros
+            while k < len(filtered) and filtered[k] == 0:
+                k += 1
+            continue
+        cleaned.append(filtered[k])
+        k += 1
+    # ensure final genome ends with a 0 separator
+    if cleaned and cleaned[-1] != 0:
+        cleaned.append(0)
+    return cleaned
 
 def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack=0, top_k=5, D_racks=None):
     cluster_idx = genome[0]
@@ -344,11 +388,16 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
     orders_arr = np.array(orders)
     order_demands_initial = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     order_demands = [d.copy() for d in order_demands_initial]
+    # number of non-empty orders (ignore blank rows in input)
+    expected_orders = sum(1 for d in order_demands_initial if any(q > 0 for q in d.values()))
     order_idx = 0
 
     while i < len(augmented):
         rack = augmented[i]
         if rack == 0:
+            # if we already produced all expected orders, ignore trailing separators
+            if order_idx >= expected_orders:
+                break
             if current != start_rack:
                 total_distance += D_racks[current, start_rack]
                 current = start_rack
@@ -375,7 +424,8 @@ def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume
                     demand[sku_id] -= take
         i += 1
 
-    if ruta_actual != [start_rack]:
+    # append last route only if we haven't already reached expected_orders
+    if ruta_actual != [start_rack] and order_idx < expected_orders:
         rutas_por_pedido.append(ruta_actual[:])
 
     penalized = False
@@ -743,11 +793,7 @@ def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks,
         try:
             print("DEBUG: slot_to_rack (len) =", len(slot_to_rack), "sample first 10:", slot_to_rack[:10])
         except Exception as _:
-            try:
-                # fallback to local name
-                print("DEBUG: slot_to_rack (len) =", len(slot_to_rack_local), "sample first 10:", slot_to_rack_local[:10])
-            except Exception as e:
-                print("DEBUG: slot_to_rack not available or invalid:", e)
+            print("DEBUG: slot_to_rack not available or invalid")
         try:
             print("DEBUG: discharge_racks computed from prohibited slots =", discharge_racks)
         except Exception as _:
