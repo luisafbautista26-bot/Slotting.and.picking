@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 # Public configuration variables expected by streamlit_app
 DEFAULT_VM_PER_SLOT = 3
 DISCHARGE_RACKS = [0, 1, 2, 3]
+DEFAULT_DISCHARGE_RACKS = DISCHARGE_RACKS
 
 # ----------------------------
 # --- PREPROCESSING & HELPERS
@@ -187,9 +188,10 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     num_orders = len(order_demands)
 
     def append_nearest_discharge(state_list, curr):
-        if not DISCHARGE_RACKS:
+        # usar siempre el parámetro local 'discharge_racks' (respeta override)
+        if not discharge_racks:
             return curr
-        nearest_discharge = min(DISCHARGE_RACKS, key=lambda dp: D_racks[curr, dp])
+        nearest_discharge = min(discharge_racks, key=lambda dp: D_racks[curr, dp])
         state_list.append(nearest_discharge)
         return nearest_discharge
 
@@ -216,12 +218,36 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                             if sku_id in demand_keys:
                                 potential_racks.add(slot_to_rack_local[slot_idx])
                     # prefer racks that are NOT discharge racks
-                    non_discharge = [r for r in potential_racks if r not in DISCHARGE_RACKS]
+                    non_discharge = [r for r in potential_racks if r not in discharge_racks]
                     chosen = None
                     if non_discharge:
                         chosen = min(non_discharge, key=lambda r: D_racks[current_rack, r])
                     elif potential_racks:
-                        chosen = min(potential_racks, key=lambda r: D_racks[current_rack, r])
+                        # all potential_racks might be discharge racks; prefer to
+                        # avoid creating a 0->discharge->0 route. Try to find
+                        # a nearby non-discharge rack that contains *any* SKU
+                        # (not necessarily demanded) and visit it instead.
+                        chosen = None
+                        # first try potential racks (may be discharge)
+                        try:
+                            chosen = min(potential_racks, key=lambda r: D_racks[current_rack, r])
+                        except Exception:
+                            chosen = None
+                        if chosen is not None and chosen in discharge_racks:
+                            # buscar racks no-descarga que contengan cualquier SKU
+                            candidate_non_discharge = set()
+                            for slot_idx, sku in enumerate(slot_assignment_row):
+                                try:
+                                    sku_id = int(sku)
+                                except Exception:
+                                    continue
+                                if sku_id == 0:
+                                    continue
+                                rack_idx = slot_to_rack_local[slot_idx]
+                                if rack_idx not in discharge_racks:
+                                    candidate_non_discharge.add(rack_idx)
+                            if candidate_non_discharge:
+                                chosen = min(candidate_non_discharge, key=lambda r: D_racks[current_rack, r])
 
                     if chosen is not None:
                         # insertar visita al rack elegido antes de cerrar el pedido
@@ -240,7 +266,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                     box_vol = 0.0
 
             # Si el último no es punto de descarga, insertar nearest antes de cerrar
-            if new_genome[-1] not in DISCHARGE_RACKS:
+            if discharge_racks and new_genome[-1] not in discharge_racks:
                 nearest = append_nearest_discharge(new_genome, current_rack)
                 current_rack = nearest
                 box_vol = 0.0
