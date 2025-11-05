@@ -42,7 +42,7 @@ st.sidebar.header("Carga de parámetros")
 excel_file = st.sidebar.file_uploader("Sube el archivo Excel de parámetros", type=["xlsx"])
 
 if excel_file is None:
-    st.info("Por favor, sube el archivo Excel de parámetros (ejemplo: DATA_TES (1).xlsx)")
+    st.info("Por favor, sube el archivo Excel de parámetros")
     st.stop()
 
 # Leer todas las hojas
@@ -561,42 +561,9 @@ with col2:
         except Exception as e:
             st.error(f"No se pudo recargar 'picking_solver': {e}")
 
-st.markdown("---")
-st.subheader("Cargar y visualizar results_summary.json (desde disco)")
-from pathlib import Path
-res_path = Path('results_summary.json')
-if st.button('Cargar results_summary.json'):
-    if not res_path.exists():
-        st.error('No se encontró results_summary.json en el workspace.')
-    else:
-        try:
-            import json
-            txt = res_path.read_text(encoding='utf-8')
-            data = json.loads(txt)
-            # construir resumen
-            rows = []
-            for e in data:
-                idx = e.get('index')
-                if 'result' in e and e['result']:
-                    r = e['result']
-                    dist = r.get('distancia_total')
-                    sku_dist = r.get('sku_distancia')
-                    penal = r.get('penalizado')
-                    rutas = r.get('rutas_best') or []
-                    n_rutas = len(rutas)
-                else:
-                    dist = None
-                    sku_dist = None
-                    penal = None
-                    n_rutas = None
-                rows.append({'index': idx, 'distancia_total': dist, 'sku_distancia': sku_dist, 'penalizado': penal, 'n_rutas': n_rutas})
-            import pandas as _pd
-            df = _pd.DataFrame(rows)
-            st.dataframe(df.sort_values('index'))
-            # ofrecer descarga del JSON tal cual
-            st.download_button('Descargar results_summary.json', txt, file_name='results_summary.json', mime='application/json')
-        except Exception as e:
-            st.error(f'Error leyendo results_summary.json: {e}')
+# Se ha eliminado la sección de carga/visualización de results_summary.json
+# para limpiar la interfaz. Si necesitas volver a habilitarla, podemos
+# reintroducirla bajo una opción de depuración.
 # Removed verbose debug display of 'augmented_best' to keep the UI clean.
 # If you need to enable this debug output again, re-add a controlled
 # debug checkbox and display it conditionally to avoid cluttering the UI.
