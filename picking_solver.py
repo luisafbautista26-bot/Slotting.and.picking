@@ -177,13 +177,16 @@ def build_genome(orders, slot_assignment_row, Vm_array_local, slot_to_rack_local
     return genome
 
 def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local,
-                                      box_volume_max, start_rack, orders, VU_map, D_racks, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES):
+                                      box_volume_max, start_rack, orders):
     """
     Inserta visitas a racks de descarga cuando corresponda:
      - Si un pedido no visitó racks, inserta nearest_discharge antes de cerrar.
      - Si un pedido termina en un rack que no es descarga, inserta nearest_discharge antes del 0 separador.
      - Si durante la simulación de picks la caja se llena, inserta nearest_discharge en ese punto.
     """
+    # This implementation expects module-level globals to be set:
+    # D_racks, VU_map, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
+    global D_racks, VU_map, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES
     cluster_idx = genome[0]
     slot_assignment_row = slot_assignments[cluster_idx]
     new_genome = [cluster_idx, 0]
@@ -200,7 +203,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     # the incoming parameter). If it's None or empty, fall back to the module
     # default DISCHARGE_RACKS constant.
     discharge_racks = list(DISCHARGE_RACKS) if DISCHARGE_RACKS is not None else list(DEFAULT_DISCHARGE_RACKS)
-
+    discharge_racks = list(DISCHARGE_RACKS) if 'DISCHARGE_RACKS' in globals() and DISCHARGE_RACKS is not None else list(DEFAULT_DISCHARGE_RACKS)
     def append_nearest_discharge(state_list, curr):
         # usar siempre el parámetro local 'discharge_racks' (respeta override)
         if not discharge_racks:
@@ -222,10 +225,10 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
-            # Si no hubo visitas durante el pedido (último añadido es 0), intentar
-            # insertar un rack que contenga SKUs demandados en lugar de sólo un punto
-            # de descarga. Esto evita rutas del tipo 0 -> descarga -> 0 cuando el
-            # pedido tiene demanda que puede ser servida desde algún rack.
+            # Always ensure we add a discharge rack before closing the order (0).
+            # If there were no intermediate visits (new_genome[-1] == 0) try to
+            # insert a rack that actually contains demanded SKUs; otherwise fall
+            # back to inserting the nearest discharge.
             if new_genome[-1] == 0:
                 try:
                     # buscar racks que tengan SKUs pedidos para este pedido
@@ -277,11 +280,23 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                         # insertar visita al rack elegido antes de cerrar el pedido
                         new_genome.append(chosen)
                         current_rack = chosen
+                        # after inserting a discharge-like visit, simulate a return to start
+                        # for the purpose of selecting the next nearest rack so we avoid
+                        # immediate transitions between different discharge racks.
+                        try:
+                            current_rack = start_rack
+                        except Exception:
+                            pass
                         box_vol = 0.0
                     else:
                         # no se encontró rack con SKUs pedidos: insertar descarga como antes
                         nearest = append_nearest_discharge(new_genome, current_rack)
                         current_rack = nearest
+                        # same: simulate return-to-start for next selection
+                        try:
+                            current_rack = start_rack
+                        except Exception:
+                            pass
                         box_vol = 0.0
                 except Exception:
                     # en caso de fallo, comportamiento por defecto: insertar descarga
@@ -291,10 +306,17 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
 
             # Si el último no es punto de descarga, insertar nearest antes de cerrar
             if discharge_racks and new_genome[-1] not in discharge_racks:
+                    # compute nearest, append it (append_nearest_discharge will avoid duplicates)
                 nearest = append_nearest_discharge(new_genome, current_rack)
                 current_rack = nearest
+                # simulate return-to-start to avoid immediate discharge->discharge transitions
+                try:
+                    current_rack = start_rack
+                except Exception:
+                    pass
                 box_vol = 0.0
 
+            # finally, append the 0 separator to close the order
             new_genome.append(0)
             # advance to next non-empty order index: we count separators as closing
             order_idx += 1
@@ -359,7 +381,22 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     # ensure final genome ends with a 0 separator
     if cleaned and cleaned[-1] != 0:
         cleaned.append(0)
-    return cleaned
+
+    # Remove consecutive discharge->discharge transitions: keep only the first
+    # discharge rack in any run of consecutive discharge racks. These adjacent
+    # discharge visits are redundant (no picks happen between them) and create
+    # empty subroutes; prefer a single discharge visit instead.
+    final = []
+    for x in cleaned:
+        if final and final[-1] in discharge_racks and x in discharge_racks:
+            # skip the later discharge rack
+            continue
+        final.append(x)
+
+    # ensure final genome ends with a 0 separator (again, after modifications)
+    if final and final[-1] != 0:
+        final.append(0)
+    return final
 
 def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack=0, top_k=5, D_racks=None):
     cluster_idx = genome[0]
@@ -379,7 +416,35 @@ def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, ord
     return total
 
 def evaluate_individual(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders, Vm_array_local, VU_map, D_racks, PROHIBITED_SLOT_INDICES):
-    augmented = insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders, VU_map, D_racks, DISCHARGE_RACKS, PROHIBITED_SLOT_INDICES)
+    # Ensure module-level globals are available for the helper with the simpler signature
+    prev_D_racks = globals().get('D_racks', None)
+    prev_VU_map = globals().get('VU_map', None)
+    prev_DISCHARGE_RACKS = globals().get('DISCHARGE_RACKS', None)
+    prev_PROHIBITED = globals().get('PROHIBITED_SLOT_INDICES', None)
+    globals()['D_racks'] = D_racks
+    globals()['VU_map'] = VU_map
+    globals()['DISCHARGE_RACKS'] = DISCHARGE_RACKS
+    globals()['PROHIBITED_SLOT_INDICES'] = PROHIBITED_SLOT_INDICES
+    try:
+        augmented = insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_local, box_volume_max, start_rack, orders)
+    finally:
+        # restore previous globals to avoid side-effects
+        if prev_D_racks is None:
+            globals().pop('D_racks', None)
+        else:
+            globals()['D_racks'] = prev_D_racks
+        if prev_VU_map is None:
+            globals().pop('VU_map', None)
+        else:
+            globals()['VU_map'] = prev_VU_map
+        if prev_DISCHARGE_RACKS is None:
+            globals().pop('DISCHARGE_RACKS', None)
+        else:
+            globals()['DISCHARGE_RACKS'] = prev_DISCHARGE_RACKS
+        if prev_PROHIBITED is None:
+            globals().pop('PROHIBITED_SLOT_INDICES', None)
+        else:
+            globals()['PROHIBITED_SLOT_INDICES'] = prev_PROHIBITED
     total_distance = 0.0
     current = start_rack
     i = 2
@@ -777,6 +842,14 @@ def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks,
 
     # Ensure DISCHARGE_RACKS derived from PROHIBITED slots and slot_to_rack
     discharge_racks = sorted(set(slot_to_rack[s] for s in PROHIBITED_SLOT_INDICES if 0 <= s < len(slot_to_rack)))
+    # Normalize: exclude the start rack (don't treat start as a discharge rack)
+    try:
+        discharge_racks = [int(r) for r in discharge_racks if int(r) != start_rack]
+    except Exception:
+        discharge_racks = [r for r in discharge_racks if r != start_rack]
+    # Fallback to a conservative default if empty — the user expects at least racks 1,2,3
+    if not discharge_racks:
+        discharge_racks = [1, 2, 3]
 
     results_combined = []
     # allow both a list of slotting solutions or a single 2D array
@@ -835,7 +908,15 @@ def nsga2_picking_streamlit(slot_assignments, D, VU, Sr, D_racks,
         pareto_front = []
         rutas_best = []
         augmented_best = None
-        discharge_racks_return = discharge_racks
+        # Normalize discharge racks returned to the caller: exclude start_rack
+        # (we don't want to report the start rack as a discharge point) and
+        # ensure a sensible fallback of [1,2,3] if the set becomes empty.
+        try:
+            discharge_racks_return = [int(r) for r in discharge_racks if int(r) != start_rack]
+        except Exception:
+            discharge_racks_return = [r for r in discharge_racks if r != start_rack] if discharge_racks else []
+        if not discharge_racks_return:
+            discharge_racks_return = [1, 2, 3]
 
         # Evaluate each best individual to get rutas and augmented (use evaluate_individual)
         for orig_idx, ind_obj, fit in zip(range(len(best_inds)), best_inds, best_fitnesses):

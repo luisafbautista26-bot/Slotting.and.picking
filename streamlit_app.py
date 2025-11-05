@@ -460,152 +460,71 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                     except Exception:
                         augmented_display = None
 
-                # --- Replace the augmented_display handling with a more robust block ---
+                # Simplified augmented display: always show the raw augmented sequence
+                # and split into per-order routes so discharge points are visible.
                 if augmented_display is not None:
-                    st.markdown('**Genome aumentado por pedido (cada fila muestra la secuencia con puntos de descarga):**')
                     try:
-                        # canonicalize augmented_display into a Python list
-                        seq = list(augmented_display)
-
-                        # If augmented_display looks like a slot->sku assignment (length similar to NUM_SLOTS),
-                        # rebuild a route-genome and re-evaluate to get the true augmented genome.
-                        # This fixes cases where picking_solver accidentally returned the slotting assignment.
                         try:
-                            # NUM_SLOTS is available in outer scope (from earlier when reading Sr)
-                            is_slot_assign = isinstance(seq, list) and len(seq) >= NUM_SLOTS
+                            seq = list(augmented_display)
                         except Exception:
-                            is_slot_assign = False
-
-                        if is_slot_assign:
-                            # Rebuild genome and re-evaluate using picking_solver functions
+                            import numpy as _np
                             try:
-                                # slot_assign is the slotting solution we passed to picking; prefer to get the one used:
-                                slot_assign_for_display = slot_assign if 'slot_assign' in locals() else seq
-                                # Build a route-genome from the orders and this slot assignment
-                                genome_rebuilt = picking_solver.build_genome(
-                                    orders=np.array(D),
-                                    slot_assignment_row=np.asarray(slot_assign_for_display),
-                                    Vm_array_local=np.full(len(slot_assign_for_display), picking_solver.DEFAULT_VM_PER_SLOT),
-                                    slot_to_rack_local=np.argmax(np.asarray(Sr), axis=1).tolist(),
-                                    start_rack=0,
-                                    cluster_idx=0,
-                                    VU_map={i+1: VU[i] for i in range(len(VU))} if isinstance(VU, dict) is False else VU,
-                                    D_racks=np.array(D_racks),
-                                    PROHIBITED_SLOT_INDICES=list(PROHIBITED_SLOTS)
-                                )
-                                # Re-evaluate to get augmented genome
-                                _, _, _, augmented_for_display = picking_solver.evaluate_individual(
-                                    genome_rebuilt,
-                                    [np.asarray(slot_assign_for_display)],
-                                    np.argmax(np.asarray(Sr), axis=1).tolist(),
-                                    box_volume_max=1.0,
-                                    start_rack=0,
-                                    orders=np.array(D),
-                                    Vm_array_local=np.full(len(slot_assign_for_display), picking_solver.DEFAULT_VM_PER_SLOT),
-                                    VU_map={i+1: VU[i] for i in range(len(VU))} if isinstance(VU, dict) is False else VU,
-                                    D_racks=np.array(D_racks),
-                                    PROHIBITED_SLOT_INDICES=list(PROHIBITED_SLOTS)
-                                )
-                                seq = list(augmented_for_display)
-                            except Exception as e_rebuild:
-                                # If rebuild fails, fall back to treating seq as-is (we'll still format best-effort)
-                                print("DEBUG: rebuild genome failed:", e_rebuild)
-                                seq = list(augmented_display)
+                                seq = _np.asarray(augmented_display).tolist()
+                            except Exception:
+                                seq = augmented_display if isinstance(augmented_display, (list, tuple)) else None
 
-                        # Now seq should be the augmented genome in the form [cluster_idx, 0, ..., 0, ...]
-                        # Remove prefix [cluster_idx, 0] if present
-                        body = seq[2:] if len(seq) >= 2 and seq[1] == 0 else seq[:]
-
-                        # Mostrar también el genoma aumentado LITERALmente tal como lo devolvió el solver.
-                        # El usuario pidió explícitamente que 0 inicie y termine y que no se muestre
-                        # la etiqueta textual "(punto de descarga)", por lo que aquí imprimimos
-                        # la secuencia tal cual (solo números) separada por ' → '.
-                        try:
-                            st.markdown('**Genoma aumentado (literal, tal como en `augmented_best`):**')
-                            st.write(' → '.join(str(int(x)) for x in seq))
-                        except Exception:
-                            # si por algún motivo seq no es iterable o contiene tipos raros, hacer fallback seguro
+                        if seq is None:
+                            st.write("No hay genoma aumentado disponible para mostrar.")
+                        else:
+                            st.markdown('**Genoma aumentado (secuencia completa):**')
                             try:
+                                st.write(' → '.join(str(int(x)) for x in seq))
+                            except Exception:
                                 st.write(seq)
-                            except Exception:
-                                pass
 
-                        # Derive discharge_racks to display. Prefer res value, then module default, then compute from PROHIBITED_SLOTS.
-                        discharge_racks_ui = res.get('discharge_racks') if isinstance(res, dict) and res.get('discharge_racks') else getattr(picking_solver, 'DISCHARGE_RACKS', [])
-                        # Ensure discharge racks do NOT include rack 0. User requires discharge racks to be 1,2,3 at minimum.
-                        try:
-                            discharge_racks_ui = [int(r) for r in discharge_racks_ui if int(r) != 0]
-                        except Exception:
-                            pass
-                        if not discharge_racks_ui:
-                            # compute from Sr & PROHIBITED_SLOTS as fallback (exclude rack 0)
-                            try:
-                                slot_to_rack_local = np.argmax(np.asarray(Sr), axis=1).tolist()
-                                discharge_racks_ui = sorted(set(slot_to_rack_local[s] for s in PROHIBITED_SLOTS if 0 <= s < len(slot_to_rack_local) and slot_to_rack_local[s] != 0))
-                            except Exception:
-                                discharge_racks_ui = []
-                        # ultimate fallback: ensure at least [1,2,3]
-                        if not discharge_racks_ui:
-                            discharge_racks_ui = [1, 2, 3]
+                            # Remove prefix [cluster_idx, 0] if present
+                            body = seq[2:] if len(seq) >= 2 and int(seq[1]) == 0 else seq[:]
 
-                        # split by orders (0 separators) but treat consecutive zeros safely
-                        # and limit the number of displayed pedidos to the number of
-                        # non-empty orders actually present in D (esto evita que
-                        # segmentos vacíos inflen el contador en la UI).
-                        raw_segments = []
-                        cur = []
-                        for v in body:
-                            if int(v) == 0:
-                                raw_segments.append(cur)
-                                cur = []
+                            # Build segments between zeros
+                            segments = []
+                            cur = []
+                            for v in body:
+                                try:
+                                    if int(v) == 0:
+                                        if cur:
+                                            segments.append(cur[:])
+                                        cur = []
+                                    else:
+                                        cur.append(int(v))
+                                except Exception:
+                                    # if value not castable, append raw
+                                    cur.append(v)
+                            if cur:
+                                segments.append(cur[:])
+
+                            st.markdown('**Rutas por pedido (cada línea muestra 0 → ... → 0):**')
+                            if not segments:
+                                st.write('No se detectaron segmentos de pedidos en el genoma aumentado.')
                             else:
-                                cur.append(int(v))
-                        if cur:
-                            raw_segments.append(cur)
+                                for si, seg in enumerate(segments, start=1):
+                                    route = [0] + seg + [0]
+                                    st.write(f"Pedido {si}: " + ' → '.join(map(str, route)))
+                            # --- Validaciones automáticas solicitadas por el usuario ---
+                            try:
+                                expected_orders = int(np.sum(np.any(np.asarray(D) != 0, axis=1)))
+                            except Exception:
+                                expected_orders = None
+                            if expected_orders is not None:
+                                if expected_orders != len(segments):
+                                    st.warning(f"Número de pedidos esperado por D = {expected_orders}, pero se detectaron {len(segments)} segmentos en el genoma aumentado. Revisa D y la asignación de slots.")
+                                else:
+                                    st.success(f"Número de pedidos OK: {expected_orders} pedidos detectados y mostrados.")
 
-                        # número esperado de pedidos (filas no vacías en D)
-                        try:
-                            expected_orders = int(np.sum(np.any(np.asarray(D) != 0, axis=1)))
-                        except Exception:
-                            expected_orders = None
-
-                        # Filtrar segmentos vacíos (producidos por ceros consecutivos)
-                        orders_segments = [seg for seg in raw_segments if len(seg) > 0]
-
-                        # Si hay más segmentos detectados que pedidos reales, truncar
-                        if expected_orders is not None and len(orders_segments) > expected_orders:
-                            orders_segments = orders_segments[:expected_orders]
-
-                        # Mostrar un banner de diagnóstico compacto para depuración rápida
-                        try:
-                            zero_frac = sum(1 for x in seq if int(x) == 0) / len(seq) if seq else None
-                        except Exception:
-                            zero_frac = None
-                        st.info(f"Diagnóstico: D.shape={np.asarray(D).shape}, pedidos_no_vacíos={expected_orders}, len(augmented)={len(seq)}, fracción_ceros={zero_frac}")
-
-                        # Build display rows: show the augmented genome segments exactly
-                        # as returned by the solver (incluye los racks de descarga
-                        # que ya insertó `insert_discharge_points_and_boxes`). No
-                        # intentamos insertar racks adicionales aquí; simplemente
-                        # mostramos lo que devolvió el solver, para mantener la
-                        # correspondencia exacta.
-                        pedidos = []
-                        rutas_aug = []
-                        for i, seg in enumerate(orders_segments):
-                            pedidos.append(f'Pedido {i+1}')
-                            if len(seg) == 0:
-                                rutas_aug.append('0 → 0')
-                                continue
-                            # mostrar la secuencia tal cual (los racks de descarga
-                            # estarán presentes si el solver los insertó)
-                            rutas_aug.append('0 → ' + ' → '.join(str(int(r)) for r in seg) + ' → 0')
-
-                        rutas_tabla = pd.DataFrame({'Pedido': pedidos, 'Genome aumentado': rutas_aug})
-                        st.dataframe(rutas_tabla)
-
+                            # Adjacent discharge->discharge cases are handled inside the
+                            # solver by collapsing consecutive discharge visits. The
+                            # UI no longer emits a warning here.
                     except Exception as e_display:
-                        print("DEBUG: error while formatting augmented_display:", e_display)
-                        # fallback: show rutas_best (existing behavior)
+                        print('DEBUG: error while formatting augmented_display:', e_display)
                         rutas_tabla = pd.DataFrame({
                             'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
                             'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
