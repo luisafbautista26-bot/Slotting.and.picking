@@ -597,20 +597,6 @@ if st.button('Cargar results_summary.json'):
             st.download_button('Descargar results_summary.json', txt, file_name='results_summary.json', mime='application/json')
         except Exception as e:
             st.error(f'Error leyendo results_summary.json: {e}')
-try:
-    # Preferir mostrar el debug en la UI cuando la variable está disponible
-    if 'resultados_picking' in locals() and resultados_picking:
-        try:
-            st.write("DEBUG - augmented_best:", resultados_picking[0].get('augmented_best'))
-        except Exception:
-            # Si por algún motivo st.write falla en este punto, caer al print de consola
-            print("DEBUG - augmented_best (console):", resultados_picking[0].get('augmented_best'))
-    else:
-        # No hay resultados de picking en este pase de ejecución; imprimir nota en consola
-        print("DEBUG - resultados_picking no está definido en el contexto actual (aún no se ejecutó picking)")
-except Exception as e:
-    # Protección extra: en caso de errores inesperados no romper la carga de la app
-    try:
-        print("DEBUG - error comprobando augmented_best:", e)
-    except Exception:
-        pass
+# Removed verbose debug display of 'augmented_best' to keep the UI clean.
+# If you need to enable this debug output again, re-add a controlled
+# debug checkbox and display it conditionally to avoid cluttering the UI.
