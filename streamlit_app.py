@@ -6,6 +6,153 @@ import random
 import math
 from collections import defaultdict
 import traceback
+import re
+
+# Helper global: parse an 'augmented' sequence into a list of integers robustly
+def parse_sequence(maybe_seq):
+    if maybe_seq is None:
+        return None
+    try:
+        seq = list(maybe_seq)
+    except Exception:
+        seq = None
+    if seq is not None:
+        try:
+            return [int(x) for x in seq]
+        except Exception:
+            pass
+        if all(isinstance(x, str) and len(x) == 1 for x in seq):
+            s = ''.join(seq)
+            nums = re.findall(r'-?\d+', s)
+            if nums:
+                return [int(n) for n in nums]
+    if isinstance(maybe_seq, str):
+        nums = re.findall(r'-?\d+', maybe_seq)
+        if nums:
+            return [int(n) for n in nums]
+    if seq is not None and all(isinstance(x, (tuple, list)) and len(x) >= 2 for x in seq):
+        try:
+            vals = [x[1] for x in seq]
+            return [int(v) for v in vals]
+        except Exception:
+            pass
+    return maybe_seq
+
+
+def render_solution_block(title, distancia, sku_dist, penal, slot_assign_idx, augmented_obj, rutas_obj, raw_key_suffix=""):
+    """Renderiza una solución usando el mismo formato que la sección 'Mejor solución'.
+    - title: título o subtítulo a mostrar
+    - distancia, sku_dist, penal: métricas (pueden ser None)
+    - slot_assign_idx: índice de la solución de slotting (opcional)
+    - augmented_obj: objeto que contiene el genoma aumentado (lista, np.array, string...)
+    - rutas_obj: rutas por pedido (lista de secuencias o representaciones)
+    - raw_key_suffix: sufijo único para checkbox de raw display
+    """
+    st.markdown(title)
+    try:
+        if distancia is not None:
+            st.write(f"- Distancia total: {float(distancia):.2f}")
+    except Exception:
+        st.write(f"- Distancia total: {distancia}")
+    try:
+        if sku_dist is not None:
+            st.write(f"- Distancia a SKUs más demandados: {float(sku_dist):.2f}")
+    except Exception:
+        st.write(f"- Distancia a SKUs más demandados: {sku_dist}")
+    try:
+        if penal is not None:
+            st.write(f"- Penalización: {'Sí' if bool(penal) else 'No'}")
+    except Exception:
+        st.write(f"- Penalización: {penal}")
+    try:
+        if slot_assign_idx is not None:
+            st.write(f"- Corresponde a la solución de slotting (cluster) #{int(slot_assign_idx)+1}")
+    except Exception:
+        pass
+
+    st.markdown('**Genoma aumentado:**')
+    seq = parse_sequence(augmented_obj)
+    if seq is None:
+        st.write('No hay genoma aumentado disponible.')
+    else:
+        try:
+            st.write(' → '.join(str(int(x)) for x in seq))
+        except Exception:
+            st.write(seq)
+
+    # Nota: se eliminó la opción de mostrar el genoma crudo aquí para
+    # simplificar la interfaz. El genoma aumentado ya se muestra en formato
+    # legible en la línea anterior.
+
+    st.markdown('**Rutas por pedido:**')
+    if not rutas_obj:
+        st.write('No hay rutas disponibles.')
+    else:
+        for pid, ruta in enumerate(rutas_obj, start=1):
+            parsed_route = None
+            try:
+                if isinstance(ruta, (np.ndarray, list, tuple)):
+                    parsed_route = list(ruta)
+                else:
+                    parsed_route = parse_sequence(ruta)
+            except Exception:
+                try:
+                    parsed_route = parse_sequence(ruta)
+                except Exception:
+                    parsed_route = None
+
+            if parsed_route is None:
+                st.write(f"Pedido {pid}: {ruta}")
+            else:
+                try:
+                    st.write(f"Pedido {pid}: {' → '.join(str(int(x)) for x in parsed_route)}")
+                except Exception:
+                    st.write(f"Pedido {pid}: {parsed_route}")
+
+
+def extract_solution_info(info):
+    """Normaliza diferentes formatos de 'info' y devuelve (distancia, sku_dist, penal, rutas_ind, augmented_ind)."""
+    distancia = sku_dist = penal = rutas_ind = augmented_ind = None
+    try:
+        if isinstance(info, dict):
+            distancia = info.get('distancia_total') or info.get('dist') or info.get('distance') or info.get('distancia')
+            sku_dist = info.get('sku_distancia') or info.get('sku_dist') or info.get('sku_distance')
+            penal = info.get('penalizado') if 'penalizado' in info else info.get('penal') or info.get('penalty')
+            rutas_ind = info.get('rutas_best') or info.get('rutas') or info.get('routes') or info.get('rutas_por_pedido') or info.get('rutas_ind')
+            augmented_ind = info.get('augmented') or info.get('augmented_best') or info.get('genome') or info.get('genoma')
+        elif isinstance(info, (list, tuple)):
+            # Different callers may pack evaluation tuples differently.
+            # Known formats handled here:
+            # 1) (dist, sku_dist, rutas, ind_obj, augmented)  <-- picking_solver current format
+            # 2) (dist, sku_dist, penal, rutas)               <-- older/alternate format
+            # 3) (dist, sku_dist, penal)                      <-- minimal tuple
+            # 4) other: best-effort assignment
+            try:
+                if len(info) >= 5:
+                    # Heuristic: if the 3rd element is a list (routes) and the 4th is a dict-like (individual),
+                    # map to the picking_solver format.
+                    third, fourth = info[2], info[3]
+                    if isinstance(third, list) and (isinstance(fourth, dict) or hasattr(fourth, 'get')):
+                        distancia, sku_dist, rutas_ind, _ind_obj, augmented_ind = info[:5]
+                        penal = None
+                    else:
+                        # fallback to previous positional expectation
+                        distancia, sku_dist, penal, rutas_ind, augmented_ind = info[:5]
+                elif len(info) == 4:
+                    distancia, sku_dist, penal, rutas_ind = info
+                    augmented_ind = None
+                elif len(info) == 3:
+                    distancia, sku_dist, penal = info
+                    rutas_ind = augmented_ind = None
+                else:
+                    rutas_ind = info
+            except Exception:
+                rutas_ind = info
+        else:
+            rutas_ind = info
+    except Exception:
+        rutas_ind = info
+    return distancia, sku_dist, penal, rutas_ind, augmented_ind
 
 st.title("NSGA-II Slotting & Picking Optimizer")
 
@@ -357,8 +504,7 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                     aug_list = list(aug)
                 except Exception:
                     try:
-                        import numpy as _np
-                        aug_list = _np.asarray(aug).tolist()
+                        aug_list = np.asarray(aug).tolist()
                     except Exception:
                         aug_list = aug
 
@@ -413,129 +559,87 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
             ax.grid(True)
             st.pyplot(fig)
 
-            # Mostrar detalles de la mejor solución de cada slotting
-            for idx, res in enumerate(resultados_picking):
-                es_mejor_global = False
-                if best_points:
-                    best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
-                    if idx == best_points[best_overall_idx][2]:
-                        es_mejor_global = True
-                st.markdown(f"#### Solución de slotting {idx+1} {'⭐' if es_mejor_global else ''}")
-                st.write(f"**Mejor individuo:**\n- Distancia total: {res['distancia_total']:.2f}\n- Distancia a SKUs más demandados: {res['sku_distancia']:.2f}\n- Penalización: {'Sí' if res['penalizado'] else 'No'}" + ("\n\n:star: **Esta es la mejor solución global de picking**" if es_mejor_global else ""))
-                st.write("**Rutas de picking por pedido (mejor individuo):**")
-                rutas_best = res['rutas_best']
+            # Mostrar la mejor solución global primero y luego una lista reducida
+            # de las mejores 10 soluciones para facilitar la inspección del usuario.
+            best_overall_slot_idx = None
+            if best_points:
+                best_overall_idx = int(np.argmin([f1+f2 for f1, f2, _ in best_points]))
+                _, _, best_overall_slot_idx = best_points[best_overall_idx]
 
-                # obtener racks de descarga usados por el solver para resaltarlos
-                # preferir los racks devueltos por el solver en res (discharge_racks)
-                try:
-                    discharge_racks_ui = res.get('discharge_racks') or getattr(picking_solver, 'DISCHARGE_RACKS', [])
-                except Exception:
-                    discharge_racks_ui = []
+            # Nota: no renderizamos la mejor solución aquí porque la mejor
+            # debe calcularse a partir de la lista combinada de individuos
+            # (esto nos permite excluirla del listado desplegable que viene
+            # a continuación). La mejor solución se mostrará más abajo.
 
-                def format_route(route, discharge_racks_local):
-                    # route es lista de ints; mostrar solo los números de racks (sin prefijo 'D')
-                    # El usuario pidió que no se muestre la notación D(x) en la ruta.
-                    out = [str(v) for v in route]
-                    return ' → '.join(out)
-
-                # Preferir mostrar el genoma aumentado completo (no separado por pedido).
-                # Si no está disponible, mostrar la tabla de rutas por pedido como fallback.
-                augmented_display = None
-                try:
-                    augmented_display = res.get('augmented_best')
-                except Exception:
-                    augmented_display = None
-
-                # si no está en res, intentar extraerlo del individuo en population_eval_triples
-                if augmented_display is None:
+            # Construir lista combinada de todas las soluciones del frente de Pareto
+            combined = []
+            for slot_idx, res in enumerate(resultados_picking):
+                pf = res.get('pareto_front', [])
+                pet = res.get('population_eval_triples', {})
+                for entry in pf:
                     try:
-                        pf = res.get('pareto_front', [])
-                        if pf:
-                            best_idx = pf[0][0]
-                        else:
-                            best_idx = 0
-                        pet = res.get('population_eval_triples', {})
-                        if pet and best_idx in pet:
-                            augmented_display = pet[best_idx][4]
+                        ind_idx, f1, f2 = entry[0], entry[1], entry[2]
                     except Exception:
-                        augmented_display = None
+                        continue
+                    combined.append({'slot_idx': slot_idx, 'ind_idx': ind_idx, 'f1': f1, 'f2': f2, 'sum': f1 + f2, 'res': res})
 
-                # Simplified augmented display: always show the raw augmented sequence
-                # and split into per-order routes so discharge points are visible.
-                if augmented_display is not None:
-                    try:
-                        try:
-                            seq = list(augmented_display)
-                        except Exception:
-                            import numpy as _np
-                            try:
-                                seq = _np.asarray(augmented_display).tolist()
-                            except Exception:
-                                seq = augmented_display if isinstance(augmented_display, (list, tuple)) else None
+            # Todas las soluciones que queremos mostrar son las que aparecen en
+            # los frentes de Pareto de cada ejecución (las entradas de 'combined').
+            # Ordenarlas por (f1, f2) para presentación. Mostraremos la mejor
+            # solución por separado y luego todas las demás en expanders.
+            combined_sorted = sorted(combined, key=lambda x: (x['f1'], x['f2']))
 
-                        if seq is None:
-                            st.write("No hay genoma aumentado disponible para mostrar.")
-                        else:
-                            st.markdown('**Genoma aumentado (secuencia completa):**')
-                            try:
-                                st.write(' → '.join(str(int(x)) for x in seq))
-                            except Exception:
-                                st.write(seq)
+            # Calcular la mejor solución global a partir de la lista combinada
+            best_entry = None
+            if combined:
+                try:
+                    best_entry = min(combined, key=lambda x: x['sum'])
+                except Exception:
+                    best_entry = None
 
-                            # Remove prefix [cluster_idx, 0] if present
-                            body = seq[2:] if len(seq) >= 2 and int(seq[1]) == 0 else seq[:]
+            # Mostrar mejor solución global (formato idéntico al de los demás)
+            if best_entry is not None:
+                try:
+                    slot_idx = best_entry['slot_idx']
+                    ind_idx = best_entry['ind_idx']
+                    res = best_entry['res']
+                    pet = res.get('population_eval_triples', {})
+                    info = pet.get(ind_idx)
+                    if info is not None:
+                        distancia, sku_dist, penal, rutas_ind, augmented_ind = extract_solution_info(info)
+                    else:
+                        distancia = sku_dist = penal = rutas_ind = augmented_ind = None
+                    render_solution_block('## Mejor solución global (resumen) ⭐', distancia, sku_dist, penal, slot_idx, augmented_ind, rutas_ind, raw_key_suffix=f"best_{slot_idx}_{ind_idx}")
+                except Exception:
+                    pass
 
-                            # Build segments between zeros
-                            segments = []
-                            cur = []
-                            for v in body:
-                                try:
-                                    if int(v) == 0:
-                                        if cur:
-                                            segments.append(cur[:])
-                                        cur = []
-                                    else:
-                                        cur.append(int(v))
-                                except Exception:
-                                    # if value not castable, append raw
-                                    cur.append(v)
-                            if cur:
-                                segments.append(cur[:])
+            st.markdown('## Otras soluciones (desplegables)')
+            # Mostrar todas las soluciones que aparecen en los frentes de Pareto
+            # (excluyendo la mejor ya mostrada) en expanders.
+            for rank, entry in enumerate(combined_sorted, start=1):
+                slot_idx = entry['slot_idx']
+                ind_idx = entry['ind_idx']
+                f1 = entry['f1']
+                f2 = entry['f2']
+                res = entry['res']
 
-                            st.markdown('**Rutas por pedido (cada línea muestra 0 → ... → 0):**')
-                            if not segments:
-                                st.write('No se detectaron segmentos de pedidos en el genoma aumentado.')
-                            else:
-                                for si, seg in enumerate(segments, start=1):
-                                    route = [0] + seg + [0]
-                                    st.write(f"Pedido {si}: " + ' → '.join(map(str, route)))
-                            # --- Validaciones automáticas solicitadas por el usuario ---
-                            try:
-                                expected_orders = int(np.sum(np.any(np.asarray(D) != 0, axis=1)))
-                            except Exception:
-                                expected_orders = None
-                            if expected_orders is not None:
-                                if expected_orders != len(segments):
-                                    st.warning(f"Número de pedidos esperado por D = {expected_orders}, pero se detectaron {len(segments)} segmentos en el genoma aumentado. Revisa D y la asignación de slots.")
-                                else:
-                                    st.success(f"Número de pedidos OK: {expected_orders} pedidos detectados y mostrados.")
+                # Omitir la entrada que ya mostramos como mejor solución
+                if best_entry is not None and slot_idx == best_entry.get('slot_idx') and ind_idx == best_entry.get('ind_idx'):
+                    continue
+
+                with st.expander(f"#{rank} - Slotting {slot_idx+1} · f1={f1:.2f}, f2={f2:.2f}"):
+                    pet = res.get('population_eval_triples', {})
+                    info = pet.get(ind_idx)
+                    if info is None:
+                        st.write('No hay detalles disponibles para este individuo.')
+                    else:
+                        distancia, sku_dist, penal, rutas_ind, augmented_ind = extract_solution_info(info)
+                        render_solution_block('', distancia, sku_dist, penal, slot_idx, augmented_ind, rutas_ind, raw_key_suffix=f"nd_{slot_idx}_{ind_idx}")
 
                             # Adjacent discharge->discharge cases are handled inside the
                             # solver by collapsing consecutive discharge visits. The
                             # UI no longer emits a warning here.
-                    except Exception as e_display:
-                        print('DEBUG: error while formatting augmented_display:', e_display)
-                        rutas_tabla = pd.DataFrame({
-                            'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
-                            'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
-                        })
-                        st.dataframe(rutas_tabla)
-                else:
-                    rutas_tabla = pd.DataFrame({
-                        'Pedido': [f'Pedido {i+1}' for i in range(len(rutas_best))],
-                        'Ruta': [format_route(ruta, discharge_racks_ui) for ruta in rutas_best]
-                    })
-                    st.dataframe(rutas_tabla)
+                
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
             st.text(traceback.format_exc())

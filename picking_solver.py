@@ -194,6 +194,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     order_idx = 0
     current_rack = start_rack
     box_vol = 0.0
+    picks_made_in_order = False
     orders_arr = np.array(orders)
     order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
     # number of non-empty orders (some input files may have empty rows)
@@ -225,6 +226,17 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     while i < len(genome):
         rack = genome[i]
         if rack == 0:
+            # If no picks were made for this order (no visits with picks),
+            # do not insert a discharge visit — simply close the order.
+            if new_genome[-1] == 0 and not picks_made_in_order:
+                new_genome.append(0)
+                order_idx += 1
+                current_rack = start_rack
+                box_vol = 0.0
+                picks_made_in_order = False
+                i += 1
+                continue
+
             # Always ensure we add a discharge rack before closing the order (0).
             # If there were no intermediate visits (new_genome[-1] == 0) try to
             # insert a rack that actually contains demanded SKUs; otherwise fall
@@ -322,6 +334,7 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
             order_idx += 1
             current_rack = start_rack
             box_vol = 0.0
+            picks_made_in_order = False
             i += 1
             continue
 
@@ -342,6 +355,8 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
                     continue
                 qty_to_pick = demand[sku_id]
                 unit_vol = VU_map.get(sku_id, 0.0)
+                if qty_to_pick > 0 and unit_vol > 0:
+                    picks_made_in_order = True
                 for _ in range(qty_to_pick):
                     if box_vol + unit_vol > box_volume_max:
                         nearest = append_nearest_discharge(new_genome, current_rack)
@@ -396,6 +411,55 @@ def insert_discharge_points_and_boxes(genome, slot_assignments, slot_to_rack_loc
     # ensure final genome ends with a 0 separator (again, after modifications)
     if final and final[-1] != 0:
         final.append(0)
+
+    # Remove initial discharge immediately after the starting separator if it
+    # doesn't make sense (i.e., the sequence starts with 0 -> discharge and
+    # there exist non-discharge racks later). This avoids routes that go to a
+    # discharge rack without picking anything first.
+    # Per-segment cleanup: for each segment between zeros, if the first rack
+    # in the segment is a discharge rack but later in the same segment there is
+    # at least one non-discharge rack, remove that initial discharge rack as
+    # it's redundant (the picker can visit the non-discharge racks first).
+    cleaned_segments = []
+    cur_seg = []
+    for v in final[2:]:
+        if v == 0:
+            cleaned_segments.append(cur_seg[:])
+            cur_seg = []
+        else:
+            cur_seg.append(v)
+    if cur_seg:
+        cleaned_segments.append(cur_seg[:])
+
+    # Process each segment and ensure that segments that include picking
+    # visits end with a discharge rack before the closing 0 separator.
+    processed_body = []
+    for seg in cleaned_segments:
+        if not seg:
+            # keep empty segments as just a separator
+            processed_body.append(0)
+            continue
+        # if first is discharge and there's some non-discharge later, drop it
+        if seg[0] in discharge_racks and any(x not in discharge_racks for x in seg[1:]):
+            seg = seg[1:]
+
+        # If the segment contains any non-discharge rack (i.e., actual picks),
+        # ensure it finishes with a discharge rack before the 0 separator.
+        contains_pick = any(x not in discharge_racks for x in seg)
+        if contains_pick:
+            # if last element is not a discharge, append the nearest discharge
+            if seg[-1] not in discharge_racks:
+                try:
+                    nearest_dp = min(discharge_racks, key=lambda dp: D_racks[seg[-1], dp])
+                    seg = seg + [nearest_dp]
+                except Exception:
+                    # fallback: append the first known discharge rack
+                    if discharge_racks:
+                        seg = seg + [discharge_racks[0]]
+        processed_body.extend(seg + [0])
+
+    # Rebuild final with header [cluster_idx, 0] + processed_body
+    final = [final[0], final[1]] + processed_body
     return final
 
 def most_demanded_sku_distance(genome, slot_assignments, slot_to_rack_local, orders, start_rack=0, top_k=5, D_racks=None):
