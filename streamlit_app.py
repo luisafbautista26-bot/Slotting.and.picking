@@ -610,6 +610,19 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                     else:
                         distancia = sku_dist = penal = rutas_ind = augmented_ind = None
                     render_solution_block('## Mejor solución global (resumen) ⭐', distancia, sku_dist, penal, slot_idx, augmented_ind, rutas_ind, raw_key_suffix=f"best_{slot_idx}_{ind_idx}")
+                    # Mostrar la asignación de slots (solución de slotting) usada
+                    try:
+                        slotting_solutions = st.session_state.get('slotting_solutions', [])
+                        if slotting_solutions and 0 <= slot_idx < len(slotting_solutions):
+                            slot_assign_used = slotting_solutions[slot_idx]
+                            st.subheader('Asignación de slots usada (solución de slotting)')
+                            df_assign = pd.DataFrame({
+                                'Slot': np.arange(len(slot_assign_used)),
+                                'SKU asignado': slot_assign_used
+                            })
+                            st.dataframe(df_assign)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -643,11 +656,6 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
         except Exception as e:
             st.error(f"Error al ejecutar picking: {e}")
             st.text(traceback.format_exc())
-
-# --- Utilidades para depuración en la UI ---
-st.markdown("---")
-st.header("Herramientas de depuración")
-st.info("Las herramientas de depuración (limpiar sesión / recargar módulo) han sido deshabilitadas en esta versión de la interfaz.")
 
 # Se ha eliminado la sección de carga/visualización de results_summary.json
 # para limpiar la interfaz. Si necesitas volver a habilitarla, podemos
