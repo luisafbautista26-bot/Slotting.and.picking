@@ -647,23 +647,7 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
 # --- Utilidades para depuración en la UI ---
 st.markdown("---")
 st.header("Herramientas de depuración")
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Limpiar sesión (slotting_solutions)"):
-        keys = ['slotting_solutions', 'D', 'VU', 'Sr', 'D_racks']
-        for k in keys:
-            if k in st.session_state:
-                del st.session_state[k]
-        st.success("Sesión limpiada: se han eliminado las soluciones de slotting de la sesión.")
-
-with col2:
-    if st.button("Recargar módulo picking_solver"):
-        try:
-            picking_solver = importlib.import_module('picking_solver')
-            importlib.reload(picking_solver)
-            st.success("Módulo 'picking_solver' recargado desde disco.")
-        except Exception as e:
-            st.error(f"No se pudo recargar 'picking_solver': {e}")
+st.info("Las herramientas de depuración (limpiar sesión / recargar módulo) han sido deshabilitadas en esta versión de la interfaz.")
 
 # Se ha eliminado la sección de carga/visualización de results_summary.json
 # para limpiar la interfaz. Si necesitas volver a habilitarla, podemos
