@@ -248,17 +248,66 @@ if st.button("Ejecutar optimización"):
 
         if VU_df is not None:
             # Construir mapa VU con claves de SKU 1-based cuando sea posible.
-            # Si la hoja VU tiene una primera columna con el id del SKU, úsala.
+            # La entrada en Excel puede venir con espacios no separables (\xa0)
+            # o comas como separador decimal (por ejemplo '0,39'). Normalizamos.
             VU = {}
-            for i, row in enumerate(VU_df.values):
-                # row puede ser un array tipo [sku, volumen] o solo [volumen]
+            def _parse_numeric_cell(x):
+                """Intenta convertir una celda de Excel a float de forma robusta.
+                - elimina espacios y \xa0
+                - convierte coma decimal a punto
+                - extrae el primer número válido si hay texto adicional
+                """
+                if x is None:
+                    raise ValueError('None')
+                # manejar ya-numeric
                 try:
-                    sku_key = int(row[0])
-                    vol = float(row[1])
+                    if isinstance(x, (int, float)):
+                        return float(x)
                 except Exception:
-                    # fallback: usar índice 1-based
+                    pass
+                s = str(x).strip()
+                # limpiar espacios no separables y espacios normales
+                s = s.replace('\xa0', '').replace(' ', '')
+                # normalizar coma decimal
+                s = s.replace(',', '.')
+                # extraer primera subcadena con formato numérico (opcional signo y decimales)
+                import re
+                m = re.search(r'-?\d+(?:\.\d+)?', s)
+                if m:
+                    return float(m.group(0))
+                raise ValueError(f'No numeric value in cell: {x!r}')
+
+            for i, row in enumerate(VU_df.values):
+                # row puede venir como array de longitud variable; limpiamos NaNs
+                row_list = [v for v in list(row) if not (isinstance(v, float) and np.isnan(v))]
+                if not row_list:
+                    continue
+                # si hay al menos 2 columnas, asumimos [sku, vol], si no solo [vol]
+                if len(row_list) >= 2:
+                    sku_cell, vol_cell = row_list[0], row_list[1]
+                else:
+                    sku_cell, vol_cell = None, row_list[0]
+
+                # parsear sku_key cuando sea posible
+                if sku_cell is not None:
+                    try:
+                        sku_key_parsed = _parse_numeric_cell(sku_cell)
+                        sku_key = int(sku_key_parsed)
+                    except Exception:
+                        sku_key = i + 1
+                else:
                     sku_key = i + 1
-                    vol = float(row[1]) if len(row) > 1 else float(row[0])
+
+                # parsear volumen
+                try:
+                    vol = _parse_numeric_cell(vol_cell)
+                except Exception:
+                    # último recurso: intentar float directo tras reemplazar comas
+                    try:
+                        vol = float(str(vol_cell).replace(',', '.').strip())
+                    except Exception:
+                        vol = 0.0
+
                 VU[int(sku_key)] = float(vol)
         else:
             st.error("No se encontró la hoja 'VU' en el Excel.")
