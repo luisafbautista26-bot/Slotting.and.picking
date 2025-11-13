@@ -382,18 +382,18 @@ if st.button("Ejecutar optimización"):
         st.markdown("""
         ### ¿Qué significa el resultado?
         El algoritmo NSGA-II busca **minimizar dos funciones objetivo**:
-        - **f1 (Dispersión de racks):** Qué tan dispersos están los SKUs iguales en diferentes racks (menos dispersión es mejor).
-        - **f2 (Costo de picking):** El costo total de recoger los productos, considerando la distancia y la demanda (menos es mejor).
+        - **Agrupamiento:** Se minimiza la distancia promedio entre los slots que almacenan el mismo SKU, esto garantiza que el mismo tipo de SKU se encuentre en la misma zona para facilitar la recolección de los productos.
+        - **Priorización de la demanda:** Se determinan los SKUs más demandados y se minimiza la distancia del punto inicial a la zona donde se almacenan esos SKUs, garantizando que los productos más demandados se ubiquen en zonas más cercanas al punto inicial.
+        
         Cada punto azul en la gráfica es una solución eficiente (óptima en el sentido de Pareto).
         """)
-        st.markdown("**Nota:** en la optimización de picking los puntos de descarga por defecto son los racks 0, 1, 2 y 3 (es decir, los 4 primeros índices) y el punto de inicio es el rack 0.")
 
         f1_vals = [f[0] for f in pareto_fitness]
         f2_vals = [f[1] for f in pareto_fitness]
         fig, ax = plt.subplots(figsize=(7,5))
         ax.scatter(f1_vals, f2_vals, c="blue", s=50, label="Soluciones Pareto")
-        ax.set_xlabel("f1 (Dispersión de racks)")
-        ax.set_ylabel("f2 (Costo de picking)")
+        ax.set_xlabel("Agrupamiento")
+        ax.set_ylabel("Priorización de la demanda")
         ax.set_title("Frente de Pareto - NSGA-II")
         ax.legend()
         ax.grid(True)
