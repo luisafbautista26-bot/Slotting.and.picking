@@ -579,6 +579,15 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
 
             st.success(f"¡Optimización de picking completada para {len(resultados_picking)} conjuntos de soluciones de slotting (combinado)!")
 
+            st.markdown("""
+            ### ¿Qué significa el resultado?
+            El algoritmo NSGA-II busca **minimizar dos funciones objetivo**:
+            - **Distancia recorrida:** Se calcula la distancia entre cada nodo de la ruta, incluyendo a los puntos de descarga y al punto inicial, estas distancias se adicionan obteniendo la distancia total. En caso de que la ruta no satisfaga la demanda del pedido se aplica una penalización.
+            - **Distancia SKUs frecuentes:** Esta función objetivo busca garantizar que los productos más demandados estén cerca al punto inicial. Para ello, se determina la demanda total de cada SKU y se seleccionan los 5 más demandados, luego se identifica qué slots del almacén contienen esos SKUs y se suma la distancia desde el punto inicial a los racks que los almacenan, esta distancia se minimiza.
+            
+            Cada punto azul en la gráfica es una solución eficiente (óptima en el sentido de Pareto).
+            """)
+
             # Unificar la gráfica de Pareto de todas las soluciones: todos los puntos en azul, mejor solución con estrella dorada
             fig, ax = plt.subplots(figsize=(7,5))
             all_f1, all_f2 = [], []
@@ -601,8 +610,8 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                 best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
                 best_f1, best_f2, best_idx = best_points[best_overall_idx]
                 ax.scatter([best_f1], [best_f2], color='gold', s=180, marker='*', edgecolor='black', label='Mejor global')
-            ax.set_xlabel('Distancia Total')
-            ax.set_ylabel('Distancia a SKUs más demandados')
+            ax.set_xlabel('Distancia recorrida')
+            ax.set_ylabel('Distancia SKUs frecuentes')
             ax.set_title('Frente de Pareto Picking (todas las soluciones de slotting)')
             ax.legend()
             ax.grid(True)
