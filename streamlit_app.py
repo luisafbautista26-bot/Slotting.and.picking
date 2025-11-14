@@ -110,6 +110,25 @@ def render_solution_block(title, distancia, sku_dist, penal, slot_assign_idx, au
                     st.write(f"Pedido {pid}: {parsed_route}")
 
 
+def compute_slots_and_boxes_from_augmented(augmented, slot_assignment_row, slot_to_rack_local,
+                                          orders, Vm_array_local, box_volume_max, discharge_racks, start_rack=0):
+    """
+    Cuenta:
+      - slots_used: ahora cuenta los slots del cluster (slot_assignment_row) que contienen producto (sku != 0).
+      - boxes_used: cuenta las apariciones de racks de descarga en el genoma aumentado (comportamiento original).
+    No se modifica ninguna otra lógica del resto del código.
+    """
+    # Contar cajas = apariciones de racks de descarga en el genoma aumentado (igual que antes)
+    boxes_used = sum(1 for gene in augmented[2:] if gene in discharge_racks)
+
+    # Nuevo: contar la cantidad de slots que tienen producto en el cluster seleccionado.
+    # Esto cuenta todos los índices de slot cuyo valor de SKU en slot_assignment_row != 0.
+    # Si prefieres excluir PROHIBITED_SLOT_INDICES, dímelo y lo ajusto.
+    slots_with_product = sum(1 for s in slot_assignment_row if int(s) != 0)
+
+    return int(slots_with_product), int(boxes_used)
+
+
 def extract_solution_info(info):
     """Normaliza diferentes formatos de 'info' y devuelve (distancia, sku_dist, penal, rutas_ind, augmented_ind)."""
     distancia = sku_dist = penal = rutas_ind = augmented_ind = None
@@ -667,7 +686,41 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
                         distancia, sku_dist, penal, rutas_ind, augmented_ind = extract_solution_info(info)
                     else:
                         distancia = sku_dist = penal = rutas_ind = augmented_ind = None
+                    
+                    # Calcular slots y cajas usados
+                    slots_used_count = None
+                    boxes_used_count = None
+                    if augmented_ind is not None:
+                        try:
+                            slotting_solutions = st.session_state.get('slotting_solutions', [])
+                            Sr_local = st.session_state.get('Sr')
+                            D_local = st.session_state.get('D')
+                            if slotting_solutions and Sr_local is not None and D_local is not None and 0 <= slot_idx < len(slotting_solutions):
+                                slot_assignment_row = slotting_solutions[slot_idx]
+                                slot_to_rack_local = np.argmax(Sr_local, axis=1).tolist()
+                                discharge_racks_calc = res.get('discharge_racks', [1, 2, 3])
+                                Vm_array_local = np.full(len(slot_assignment_row), 3)  # DEFAULT_VM_PER_SLOT
+                                box_volume_max = 1.0
+                                slots_used_count, boxes_used_count = compute_slots_and_boxes_from_augmented(
+                                    augmented_ind,
+                                    slot_assignment_row,
+                                    slot_to_rack_local,
+                                    D_local,
+                                    Vm_array_local,
+                                    box_volume_max,
+                                    discharge_racks_calc,
+                                    start_rack=0
+                                )
+                        except Exception as e:
+                            st.warning(f"No se pudo calcular slots/cajas: {e}")
+                    
                     render_solution_block('## Mejor solución global (resumen) ⭐', distancia, sku_dist, penal, slot_idx, augmented_ind, rutas_ind, raw_key_suffix=f"best_{slot_idx}_{ind_idx}")
+                    
+                    # Mostrar slots y cajas si están disponibles
+                    if slots_used_count is not None and boxes_used_count is not None:
+                        st.write(f"**Cantidad de slots usados:** {slots_used_count}")
+                        st.write(f"**Número de cajas utilizadas:** {boxes_used_count}")
+                    
                     # Mostrar la asignación de slots (solución de slotting) usada
                     try:
                         slotting_solutions = st.session_state.get('slotting_solutions', [])
