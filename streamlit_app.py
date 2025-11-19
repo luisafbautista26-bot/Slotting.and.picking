@@ -113,18 +113,101 @@ def render_solution_block(title, distancia, sku_dist, penal, slot_assign_idx, au
 def compute_slots_and_boxes_from_augmented(augmented, slot_assignment_row, slot_to_rack_local,
                                           orders, Vm_array_local, box_volume_max, discharge_racks, start_rack=0):
     """
-    Cuenta:
-      - slots_used: ahora cuenta los slots del cluster (slot_assignment_row) que contienen producto (sku != 0).
-      - boxes_used: cuenta las apariciones de racks de descarga en el genoma aumentado (comportamiento original).
-    No se modifica ninguna otra lógica del resto del código.
+    Simula el genoma aumentado y:
+      - cuenta slots_with_product: slots del cluster con sku != 0
+      - cuenta boxes_used:
+          * cuenta descargas explícitas en `augmented` (racks en discharge_racks, EXCLUYENDO start_rack/0),
+          * durante la simulación de picks unitarios, si un pick provocaría overflow se contabiliza (y reinicia) una caja ANTES del pick,
+          * al encontrar un separador 0 (fin de pedido) se cuenta una caja si la caja contenía producto (box_vol > 0) y se reinicia box_vol.
+      Garantía: box_vol nunca superará box_volume_max durante la simulación.
     """
-    # Contar cajas = apariciones de racks de descarga en el genoma aumentado (igual que antes)
-    boxes_used = sum(1 for gene in augmented[2:] if gene in discharge_racks)
+    orders_arr = np.array(orders)
+    order_demands = [dict((int(sku)+1, int(qty)) for sku, qty in enumerate(order) if qty > 0) for order in orders_arr]
+    num_orders = len(order_demands)
 
-    # Nuevo: contar la cantidad de slots que tienen producto en el cluster seleccionado.
-    # Esto cuenta todos los índices de slot cuyo valor de SKU en slot_assignment_row != 0.
-    # Si prefieres excluir PROHIBITED_SLOT_INDICES, dímelo y lo ajusto.
+    # slots with product in this cluster
     slots_with_product = sum(1 for s in slot_assignment_row if int(s) != 0)
+
+    # exclude start_rack (0) from explicit discharge counting
+    discharge_set = set(discharge_racks) - {start_rack}
+
+    boxes_used = 0
+    order_idx = 0
+    i = 2
+    box_vol = 0.0
+    current_rack = start_rack
+
+    # Necesitamos VU_map - si no existe globalmente, construirlo desde st.session_state
+    VU_map_local = {}
+    try:
+        if 'VU_map' in globals():
+            VU_map_local = globals()['VU_map']
+        elif 'VU' in st.session_state:
+            VU_data = st.session_state['VU']
+            if isinstance(VU_data, dict):
+                VU_map_local = {int(k): float(v) for k, v in VU_data.items()}
+            else:
+                VU_arr = np.asarray(VU_data, dtype=float)
+                VU_map_local = {i+1: float(VU_arr[i]) for i in range(len(VU_arr))}
+    except Exception:
+        pass
+
+    while i < len(augmented):
+        rack = augmented[i]
+
+        # end of order: count a box if box has content, then reset
+        if rack == start_rack:
+            if box_vol > 0:
+                boxes_used += 1
+            box_vol = 0.0
+            order_idx += 1
+            current_rack = start_rack
+            i += 1
+            continue
+
+        # explicit discharge in augmented (excluding start_rack): count and reset
+        if rack in discharge_set:
+            boxes_used += 1
+            box_vol = 0.0
+            current_rack = rack
+            i += 1
+            continue
+
+        # normal rack visit: simulate picks unit-by-unit
+        if order_idx < num_orders:
+            demand = order_demands[order_idx]
+            for slot_idx, sku in enumerate(slot_assignment_row):
+                if slot_idx >= len(slot_to_rack_local):
+                    continue
+                if slot_to_rack_local[slot_idx] != rack:
+                    continue
+                sku_id = int(sku)
+                if sku_id == 0:
+                    continue
+                if sku_id not in demand or demand[sku_id] <= 0:
+                    continue
+
+                qty_to_pick = int(demand[sku_id])
+                unit_vol = VU_map_local.get(sku_id, 0.0)
+                if unit_vol <= 0:
+                    demand[sku_id] = 0
+                    continue
+
+                # pick unit-by-unit: before each unit, if overflow would occur, count a box and reset
+                for _ in range(qty_to_pick):
+                    if box_vol + unit_vol > box_volume_max + 1e-12:
+                        boxes_used += 1
+                        box_vol = 0.0
+                    box_vol += unit_vol
+                demand[sku_id] = 0
+
+        current_rack = rack
+        i += 1
+
+    # if remaining volume at end, count one more box
+    if box_vol > 0:
+        boxes_used += 1
+        box_vol = 0.0
 
     return int(slots_with_product), int(boxes_used)
 
