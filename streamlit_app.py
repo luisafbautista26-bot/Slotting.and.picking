@@ -690,34 +690,49 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
             Cada punto azul en la gráfica es una solución eficiente (óptima en el sentido de Pareto).
             """)
 
-            # Unificar la gráfica de Pareto de todas las soluciones: todos los puntos en azul, mejor solución con estrella dorada
-            fig, ax = plt.subplots(figsize=(7,5))
-            all_f1, all_f2 = [], []
-            best_points = []
-            for idx, res in enumerate(resultados_picking):
-                pf = res['pareto_front']
-                f1 = [x[1] for x in pf]
-                f2 = [x[2] for x in pf]
-                all_f1.extend(f1)
-                all_f2.extend(f2)
-                # Mejor de cada slotting
-                best_idx = min(pf, key=lambda x: x[1])[0] if pf else 0
-                best_f1 = res['population_eval_triples'][best_idx][0]
-                best_f2 = res['population_eval_triples'][best_idx][1]
-                best_points.append((best_f1, best_f2, idx))
-            # Todos los puntos en azul
-            ax.scatter(all_f1, all_f2, color='tab:blue', s=60, alpha=0.7, label='Soluciones Pareto')
-            # Mejor solución global con estrella dorada
-            if best_points:
-                best_overall_idx = np.argmin([f1+f2 for f1, f2, _ in best_points])
-                best_f1, best_f2, best_idx = best_points[best_overall_idx]
-                ax.scatter([best_f1], [best_f2], color='gold', s=180, marker='*', edgecolor='black', label='Mejor global')
-            ax.set_xlabel('Distancia recorrida')
-            ax.set_ylabel('Distancia SKUs frecuentes')
-            ax.set_title('Frente de Pareto Picking (todas las soluciones de slotting)')
-            ax.legend()
-            ax.grid(True)
-            st.pyplot(fig)
+            # Graficar frente de Pareto de todas las soluciones
+            try:
+                fig, ax = plt.subplots(figsize=(7,5))
+                all_f1, all_f2 = [], []
+                best_points = []
+                
+                for idx, res in enumerate(resultados_picking):
+                    pf = res.get('pareto_front', [])
+                    if not pf:
+                        continue
+                    f1_vals = [x[1] for x in pf]
+                    f2_vals = [x[2] for x in pf]
+                    all_f1.extend(f1_vals)
+                    all_f2.extend(f2_vals)
+                    
+                    # Identificar mejor solución de cada slotting (menor distancia total)
+                    best_entry = min(pf, key=lambda x: x[1])
+                    best_idx = best_entry[0]
+                    pet = res.get('population_eval_triples', {})
+                    if best_idx in pet:
+                        best_f1 = pet[best_idx][0]
+                        best_f2 = pet[best_idx][1]
+                        best_points.append((best_f1, best_f2, idx))
+                
+                # Graficar todos los puntos del frente de Pareto en azul
+                if all_f1 and all_f2:
+                    ax.scatter(all_f1, all_f2, c='blue', s=60, alpha=0.7, label='Frente de Pareto')
+                
+                # Destacar la mejor solución global con estrella dorada
+                if best_points:
+                    best_overall_idx = int(np.argmin([f1 + f2 for f1, f2, _ in best_points]))
+                    best_f1, best_f2, best_slot_idx = best_points[best_overall_idx]
+                    ax.scatter([best_f1], [best_f2], c='gold', s=200, marker='*', 
+                              edgecolors='black', linewidths=1.5, label='Mejor solución global', zorder=5)
+                
+                ax.set_xlabel('Distancia recorrida')
+                ax.set_ylabel('Distancia SKUs frecuentes')
+                ax.set_title('Frente de Pareto - Optimización de Picking')
+                ax.legend(loc='best')
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+            except Exception as e:
+                st.warning(f"No se pudo generar la gráfica del frente de Pareto: {e}")
 
             # Mostrar la mejor solución global primero y luego una lista reducida
             # de las mejores 10 soluciones para facilitar la inspección del usuario.
