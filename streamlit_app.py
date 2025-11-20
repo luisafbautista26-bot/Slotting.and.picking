@@ -729,54 +729,121 @@ if 'slotting_solutions' in st.session_state and len(st.session_state['slotting_s
 
             # Graficar frente de Pareto de todas las soluciones
             try:
-                fig, ax = plt.subplots(figsize=(7,5))
-                all_f1, all_f2 = [], []
-                best_points = []
+                # Función auxiliar para verificar dominancia (minimización)
+                def is_dominated(point, other_point):
+                    """Retorna True si point es dominado por other_point (ambos objetivos se minimizan)"""
+                    f1_p, f2_p = point
+                    f1_o, f2_o = other_point
+                    # other_point domina a point si es mejor o igual en ambos objetivos
+                    # y estrictamente mejor en al menos uno
+                    return (f1_o <= f1_p and f2_o <= f2_p) and (f1_o < f1_p or f2_o < f2_p)
                 
-                for idx, res in enumerate(resultados_picking):
+                def filter_pareto_front(points):
+                    """Filtra solo las soluciones no dominadas del conjunto de puntos"""
+                    if not points:
+                        return []
+                    non_dominated = []
+                    for i, point in enumerate(points):
+                        dominated = False
+                        for j, other_point in enumerate(points):
+                            if i != j and is_dominated(point, other_point):
+                                dominated = True
+                                break
+                        if not dominated:
+                            non_dominated.append(point)
+                    return non_dominated
+                
+                # Recolectar TODOS los puntos de todas las soluciones
+                all_points = []  # Lista de tuplas (f1, f2, slot_idx, ind_idx)
+                
+                for slot_idx, res in enumerate(resultados_picking):
                     pf = res.get('pareto_front', [])
-                    if not pf:
-                        continue
-                    f1_vals = [x[1] for x in pf]
-                    f2_vals = [x[2] for x in pf]
-                    all_f1.extend(f1_vals)
-                    all_f2.extend(f2_vals)
-                    
-                    # Identificar mejor solución de cada slotting (menor distancia total)
-                    best_entry = min(pf, key=lambda x: x[1])
-                    best_idx = best_entry[0]
                     pet = res.get('population_eval_triples', {})
-                    if best_idx in pet:
-                        best_f1 = pet[best_idx][0]
-                        best_f2 = pet[best_idx][1]
-                        best_points.append((best_f1, best_f2, idx))
+                    for entry in pf:
+                        try:
+                            ind_idx = entry[0]
+                            f1 = entry[1]
+                            f2 = entry[2]
+                            all_points.append((f1, f2, slot_idx, ind_idx))
+                        except Exception:
+                            continue
                 
-                # Graficar todos los puntos del frente de Pareto en azul
-                if all_f1 and all_f2:
-                    ax.scatter(all_f1, all_f2, c='blue', s=60, alpha=0.7, label='Frente de Pareto')
-                
-                # Destacar la mejor solución global con estrella dorada
-                if best_points:
-                    best_overall_idx = int(np.argmin([f1 + f2 for f1, f2, _ in best_points]))
-                    best_f1, best_f2, best_slot_idx = best_points[best_overall_idx]
-                    ax.scatter([best_f1], [best_f2], c='gold', s=200, marker='*', 
-                              edgecolors='black', linewidths=1.5, label='Mejor solución global', zorder=5)
-                
-                ax.set_xlabel('Distancia recorrida')
-                ax.set_ylabel('Distancia SKUs frecuentes')
-                ax.set_title('Frente de Pareto - Optimización de Picking')
-                ax.legend(loc='best')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
+                if not all_points:
+                    st.warning("No se encontraron soluciones en el frente de Pareto")
+                else:
+                    # Filtrar para obtener solo las soluciones verdaderamente no dominadas
+                    points_for_filtering = [(f1, f2) for f1, f2, _, _ in all_points]
+                    pareto_points = filter_pareto_front(points_for_filtering)
+                    
+                    # Crear mapeo de puntos Pareto verdaderos
+                    pareto_set = set(pareto_points)
+                    
+                    # Separar puntos Pareto de puntos dominados
+                    pareto_f1, pareto_f2 = [], []
+                    dominated_f1, dominated_f2 = [], []
+                    
+                    for f1, f2, _, _ in all_points:
+                        if (f1, f2) in pareto_set:
+                            pareto_f1.append(f1)
+                            pareto_f2.append(f2)
+                        else:
+                            dominated_f1.append(f1)
+                            dominated_f2.append(f2)
+                    
+                    # Crear gráfica
+                    fig, ax = plt.subplots(figsize=(7,5))
+                    
+                    # Graficar puntos dominados en gris claro (opcional, para referencia)
+                    if dominated_f1:
+                        ax.scatter(dominated_f1, dominated_f2, c='lightgray', s=30, alpha=0.4, 
+                                  label='Soluciones dominadas', zorder=1)
+                    
+                    # Graficar frente de Pareto verdadero en azul
+                    if pareto_f1:
+                        ax.scatter(pareto_f1, pareto_f2, c='blue', s=60, alpha=0.7, 
+                                  label=f'Frente de Pareto ({len(pareto_f1)} soluciones)', zorder=3)
+                    
+                    # Encontrar y destacar la mejor solución global (menor suma de objetivos en el frente Pareto)
+                    if pareto_points:
+                        best_point = min(pareto_points, key=lambda p: p[0] + p[1])
+                        best_f1, best_f2 = best_point
+                        ax.scatter([best_f1], [best_f2], c='gold', s=200, marker='*', 
+                                  edgecolors='black', linewidths=1.5, label='Mejor solución global', zorder=5)
+                        
+                        # Guardar para uso posterior
+                        best_points = [best_point]
+                    
+                    ax.set_xlabel('Distancia recorrida')
+                    ax.set_ylabel('Distancia SKUs frecuentes')
+                    ax.set_title('Frente de Pareto - Optimización de Picking')
+                    ax.legend(loc='best')
+                    ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+                    
+                    # Mostrar estadísticas
+                    st.write(f"**Estadísticas del frente de Pareto:**")
+                    st.write(f"- Soluciones no dominadas: {len(pareto_points)}")
+                    st.write(f"- Soluciones dominadas: {len(all_points) - len(pareto_points)}")
+                    st.write(f"- Total de soluciones evaluadas: {len(all_points)}")
+                    
             except Exception as e:
                 st.warning(f"No se pudo generar la gráfica del frente de Pareto: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+                # Definir best_points vacío en caso de error para evitar NameError
+                best_points = []
 
             # Mostrar la mejor solución global primero y luego una lista reducida
             # de las mejores 10 soluciones para facilitar la inspección del usuario.
             best_overall_slot_idx = None
-            if best_points:
-                best_overall_idx = int(np.argmin([f1+f2 for f1, f2, _ in best_points]))
-                _, _, best_overall_slot_idx = best_points[best_overall_idx]
+            if 'best_points' in locals() and best_points:
+                # best_points ahora contiene solo el mejor punto del frente Pareto verdadero
+                best_f1, best_f2 = best_points[0]
+                # Encontrar el slot_idx e ind_idx correspondiente
+                for f1, f2, slot_idx, ind_idx in all_points:
+                    if abs(f1 - best_f1) < 1e-9 and abs(f2 - best_f2) < 1e-9:
+                        best_overall_slot_idx = slot_idx
+                        break
 
             # Nota: no renderizamos la mejor solución aquí porque la mejor
             # debe calcularse a partir de la lista combinada de individuos
