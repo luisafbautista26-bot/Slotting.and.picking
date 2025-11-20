@@ -416,7 +416,17 @@ if st.button("Ejecutar optimización"):
             st.stop()
 
         if D_df is not None:
-            D = D_df.values
+            # Limpiar la matriz D: convertir todos los valores a números de forma robusta
+            D_cleaned = np.zeros(D_df.shape, dtype=float)
+            for i in range(D_df.shape[0]):
+                for j in range(D_df.shape[1]):
+                    cell_value = D_df.iloc[i, j]
+                    try:
+                        D_cleaned[i, j] = _parse_numeric_cell(cell_value)
+                    except Exception:
+                        # Si no se puede parsear, usar 0.0 por defecto
+                        D_cleaned[i, j] = 0.0
+            D = D_cleaned
         else:
             st.error("No se encontró la hoja 'D' en el Excel.")
             st.stop()
@@ -434,7 +444,16 @@ if st.button("Ejecutar optimización"):
         NUM_SKUS = D.shape[1]
 
         if Sr_df is not None:
-            Sr = Sr_df.values
+            # Limpiar la matriz Sr: convertir todos los valores a números
+            Sr_cleaned = np.zeros(Sr_df.shape, dtype=float)
+            for i in range(Sr_df.shape[0]):
+                for j in range(Sr_df.shape[1]):
+                    cell_value = Sr_df.iloc[i, j]
+                    try:
+                        Sr_cleaned[i, j] = _parse_numeric_cell(cell_value)
+                    except Exception:
+                        Sr_cleaned[i, j] = 0.0
+            Sr = Sr_cleaned
         else:
             st.error("No se encontró la hoja 'Sr' en el Excel.")
             st.stop()
@@ -449,7 +468,16 @@ if st.button("Ejecutar optimización"):
         PROHIBITED_SLOTS = {0, 1, 2, 3}
 
         if D_racks_df is not None:
-            D_racks = D_racks_df.values
+            # Limpiar la matriz D_racks: convertir todos los valores a números
+            D_racks_cleaned = np.zeros(D_racks_df.shape, dtype=float)
+            for i in range(D_racks_df.shape[0]):
+                for j in range(D_racks_df.shape[1]):
+                    cell_value = D_racks_df.iloc[i, j]
+                    try:
+                        D_racks_cleaned[i, j] = _parse_numeric_cell(cell_value)
+                    except Exception:
+                        D_racks_cleaned[i, j] = 0.0
+            D_racks = D_racks_cleaned
         else:
             st.error("No se encontró la hoja 'D_racks' en el Excel.")
             st.stop()
