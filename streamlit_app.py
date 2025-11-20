@@ -358,16 +358,22 @@ if st.button("Ejecutar optimización"):
                 - elimina espacios y \xa0
                 - convierte coma decimal a punto
                 - extrae el primer número válido si hay texto adicional
+                - convierte NaN a 0.0
                 """
                 if x is None:
                     raise ValueError('None')
                 # manejar ya-numeric
                 try:
                     if isinstance(x, (int, float)):
+                        if np.isnan(x):
+                            raise ValueError('NaN value')
                         return float(x)
                 except Exception:
                     pass
                 s = str(x).strip()
+                # detectar strings 'nan', 'NaN', etc.
+                if s.lower() in ['nan', 'none', '']:
+                    raise ValueError('NaN or empty string')
                 # limpiar espacios no separables y espacios normales
                 s = s.replace('\xa0', '').replace(' ', '')
                 # normalizar coma decimal
@@ -376,7 +382,10 @@ if st.button("Ejecutar optimización"):
                 import re
                 m = re.search(r'-?\d+(?:\.\d+)?', s)
                 if m:
-                    return float(m.group(0))
+                    val = float(m.group(0))
+                    if np.isnan(val):
+                        raise ValueError('Parsed to NaN')
+                    return val
                 raise ValueError(f'No numeric value in cell: {x!r}')
 
             for i, row in enumerate(VU_df.values):

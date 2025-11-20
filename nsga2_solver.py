@@ -32,7 +32,16 @@ def calcular_required_slots(D, VU, Vm):
             vu_val = float(VU.get(sku_id, 0.0))
         else:
             vu_val = float(VU[sku_idx])
-        required_slots[sku_id] = math.ceil(demand_total[sku_idx] * vu_val / Vm)
+        
+        # Manejar NaN y valores inválidos
+        demand_val = demand_total[sku_idx]
+        if np.isnan(demand_val) or np.isnan(vu_val) or vu_val <= 0 or Vm <= 0:
+            required_slots[sku_id] = 0
+        else:
+            try:
+                required_slots[sku_id] = math.ceil(demand_val * vu_val / Vm)
+            except (ValueError, OverflowError):
+                required_slots[sku_id] = 0
     return required_slots
 
 def get_rack_for_slot(slot_idx, rack_assignment):
